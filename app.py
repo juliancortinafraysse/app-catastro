@@ -47,12 +47,12 @@ def consultar_itc(nomenclatura):
   payload = {"user": ITC_USER, "pass": ITC_PASS}
 
   try:
-    r_login = session.post(login_url, json=payload, headers=headers, timeout=15)
+    r_login = session.post(login_url, json=payload, headers=headers, timeout=10)
     if r_login.status_code != 200:
       return None, "Error de autenticación con el ITC de Catastro."
 
     url_alfa = f"{ITC_BASE}/site/ITC.Services/Json/ParcelaServiceJson.svc/json/GetByNomenclatura?nomen={nomen_limpia}&ph="
-    r_alfa = session.get(url_alfa, headers=headers, timeout=15)
+    r_alfa = session.get(url_alfa, headers=headers, timeout=10)
     datos_lista = r_alfa.json().get("GetByNomenclaturaResult", [])
 
     if not datos_lista:
@@ -71,7 +71,7 @@ def consultar_itc(nomenclatura):
           f"{ITC_BASE}/server/rest/services/EditFeatures/FeatureServer/{service_id}/query?"
           f"f=json&where=ObjectId%20%3D%20{object_id}&returnGeometry=true&outSR=4326&outFields=*"
       )
-      r_geo = session.get(url_geo, headers=headers, timeout=15)
+      r_geo = session.get(url_geo, headers=headers, timeout=10)
       geo_json = r_geo.json()
       features = geo_json.get("features", [])
       if features and "geometry" in features[0]:
@@ -95,7 +95,11 @@ def consultar_itc(nomenclatura):
     }
     return resultado, None
   except Exception as e:
-    return None, f"Error de conexión: {str(e)}"
+    return (
+        None,
+        "El servidor de Catastro no respondió (bloqueo de IP de nube)."
+        " Utilice la carga manual abajo.",
+    )
 
 
 def generar_pdf(
@@ -258,37 +262,55 @@ def generar_pdf(
 
 
 # --- INTERFAZ STREAMLIT ---
-nomenclatura_input = st.text_input(
-    "Nomenclatura Catastral (15 dígitos):", value="092007835750000"
+modo = st.radio(
+    "Modo de operación:",
+    ["Consulta automática ITC", "Carga manual (Respaldo por bloqueo IP)"],
 )
 
-if st.button("Consultar Parcelas en ITC", type="primary"):
-  with st.spinner("Conectando con el ITC de Catastro..."):
-    data, error = consultar_itc(nomenclatura_input)
-    if error:
-      st.error(error)
-    else:
-      st.session_state["parcela"] = data
+if modo == "Consulta automática ITC":
+  nomenclatura_input = st.text_input(
+      "Nomenclatura Catastral (15 dígitos):", value="092007835750000"
+  )
+
+  if st.button("Consultar Parcelas en ITC", type="primary"):
+    with st.spinner("Conectando con el ITC de Catastro..."):
+      data, error = consultar_itc(nomenclatura_input)
+      if error:
+        st.error(error)
+      else:
+        st.session_state["parcela"] = data
+
+else:
+  st.info(
+      "Modo manual activado: ingrese los datos de la parcela para generar el"
+      " presupuesto."
+  )
+  nom_man = st.text_input(
+      "Nomenclatura Catastral:", value="09-20-078-3575-0000"
+  )
+  ubic_man = st.text_input(
+      "Ubicación / Loteo:", value="Bº Bardas Soleadas - Neuquén"
+  )
+  plano_man = st.text_input("Plano Antecedente / Trámite:", value="1234/2024")
+
+  if st.button("Cargar Datos Manuales", type="primary"):
+    st.session_state["parcela"] = {
+        "nomenclatura": nom_man,
+        "plano_antecedente": plano_man,
+        "ubicacion_loteo": ubic_man,
+        "lote": "-",
+        "manzana": "-",
+        "sup_mensura": 0,
+        "google_maps_url": "",
+    }
+    st.success("¡Datos de parcela cargados manualmente con éxito!")
 
 if "parcela" in st.session_state:
   p = st.session_state["parcela"]
-  st.success("¡Parcela encontrada con éxito!")
+  st.success("Parcela activa en sistema:")
 
   st.markdown(f"**Ubicación:** {p['ubicacion_loteo']}")
-  st.markdown(f"**Lote / Manzana:** Lote {p['lote']} - Mz {p['manzana']}")
-  st.markdown(f"**Superficie de Mensura:** {p['sup_mensura']} m²")
-  st.markdown(
-      f"**Plano Antecedente:** :orange[**{p['plano_antecedente']}**]"
-  )
-
-  if p["google_maps_url"]:
-    st.markdown(
-        f"<a href='{p['google_maps_url']}' target='_blank' style='display:block;"
-        " text-align:center; background:#319795; color:white; padding:10px;"
-        " border-radius:6px; text-decoration:none; font-weight:bold;'>📍 Abrir"
-        " ubicación exacta en Google Maps</a>",
-        unsafe_allow_html=True,
-    )
+  st.markdown(f"**Plano Antecedente:** :orange[**{p['plano_antecedente']}**]")
 
   st.divider()
   st.subheader("Armar Presupuesto Automático")

@@ -37,22 +37,30 @@ def consultar_itc(nomenclatura):
       f"{ITC_BASE}/site/ITC.Services/Json/SecurityServiceJson.svc/json/PostAuthenticate"
   )
   headers = {
-      "accept": "*/*",
-      "content-type": "application/json",
+      "accept": "application/json, text/javascript, */*; q=0.01",
+      "content-type": "application/json; charset=UTF-8",
+      "origin": ITC_BASE,
       "referer": (
           f"{ITC_BASE}/portal/apps/webappviewer/index.html?id=63f0c3f9a047425280951f418621171f"
       ),
-      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      "user-agent": (
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
+          " like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      ),
   }
   payload = {"user": ITC_USER, "pass": ITC_PASS}
 
   try:
-    r_login = session.post(login_url, json=payload, headers=headers, timeout=10)
+    r_login = session.post(login_url, json=payload, headers=headers, timeout=15)
     if r_login.status_code != 200:
       return None, "Error de autenticación con el ITC de Catastro."
 
     url_alfa = f"{ITC_BASE}/site/ITC.Services/Json/ParcelaServiceJson.svc/json/GetByNomenclatura?nomen={nomen_limpia}&ph="
-    r_alfa = session.get(url_alfa, headers=headers, timeout=10)
+    r_alfa = session.get(url_alfa, headers=headers, timeout=15)
+    
+    if r_alfa.status_code != 200:
+      return None, "Catastro no respondió a la consulta de nomenclatura."
+
     datos_lista = r_alfa.json().get("GetByNomenclaturaResult", [])
 
     if not datos_lista:
@@ -71,7 +79,7 @@ def consultar_itc(nomenclatura):
           f"{ITC_BASE}/server/rest/services/EditFeatures/FeatureServer/{service_id}/query?"
           f"f=json&where=ObjectId%20%3D%20{object_id}&returnGeometry=true&outSR=4326&outFields=*"
       )
-      r_geo = session.get(url_geo, headers=headers, timeout=10)
+      r_geo = session.get(url_geo, headers=headers, timeout=15)
       geo_json = r_geo.json()
       features = geo_json.get("features", [])
       if features and "geometry" in features[0]:
@@ -95,11 +103,7 @@ def consultar_itc(nomenclatura):
     }
     return resultado, None
   except Exception as e:
-    return (
-        None,
-        "El servidor de Catastro no respondió (bloqueo de IP de nube)."
-        " Utilice la carga manual abajo.",
-    )
+    return None, f"Error de conexión con el servidor: {str(e)}"
 
 
 def generar_pdf(
@@ -181,183 +185,4 @@ def generar_pdf(
   p.setFont("Helvetica-Bold", 12)
   p.setFillColorRGB(0.1, 0.2, 0.35)
   p.drawString(
-      40, height - 355, f"Honorarios Profesionales Totales: ${honorarios} + IVA"
-  )
-
-  # --- INCLUYE ---
-  p.setFont("Helvetica-Bold", 10)
-  p.drawString(40, height - 385, "Los honorarios profesionales incluyen:")
-  p.setFont("Helvetica", 10)
-  if tipo == "VEP":
-    p.drawString(
-        55,
-        height - 403,
-        "• Relevamiento planimétrico y verificación de ocupación en terreno.",
-    )
-    p.drawString(
-        55,
-        height - 418,
-        "• Confección y tramitación digital de la VEP ante la DPCeIT.",
-    )
-    p.drawString(55, height - 433, "• Obtención del Certificado Catastral.")
-  else:
-    p.drawString(
-        55, height - 403, "• Relevamiento de antecedentes y mensura original."
-    )
-    p.drawString(
-        55, height - 418, "• Replanteo y amojonamiento perimetral en terreno."
-    )
-    p.drawString(
-        55, height - 433, "• Confección y visado del CDA municipal."
-    )
-
-  # --- FORMA DE PAGO Y PLAZOS ---
-  p.setFont("Helvetica-Bold", 10)
-  p.setFillColorRGB(0.1, 0.2, 0.35)
-  p.drawString(40, height - 465, "Formas de Pago y Plazos de Ejecución:")
-  p.setFont("Helvetica", 10)
-  p.setFillColorRGB(0.2, 0.2, 0.2)
-
-  if es_rui_rue:
-    p.drawString(
-        55,
-        height - 483,
-        "• 50% de anticipo en concepto de inicio de tareas técnicas y de"
-        " gabinete.",
-    )
-    p.drawString(
-        55,
-        height - 498,
-        "• 50% restante contra entrega de la documentación técnica aprobada.",
-    )
-  else:
-    p.drawString(
-        55,
-        height - 483,
-        "• Pago único contra entrega de la documentación final registrada.",
-    )
-
-  p.drawString(
-      55, height - 514, "• Plazo estimado de ejecución: 15 a 20 días hábiles."
-  )
-  p.drawString(
-      55, height - 529, "• Validez de la presente propuesta: 10 días corridos."
-  )
-
-  # --- CIERRE Y FIRMA ---
-  p.drawString(
-      40, height - 575, "Sin otro particular, saludo a Ud. atentamente,"
-  )
-
-  p.setFont("Helvetica-Bold", 10)
-  p.drawString(40, height - 635, "Ing. Agrim. Julián Cortina Fraysse")
-  p.setFont("Helvetica", 9)
-  p.setFillColorRGB(0.4, 0.4, 0.4)
-  p.drawString(40, height - 648, "Matrícula Profesional AGR. 382")
-
-  p.showPage()
-  p.save()
-  buffer.seek(0)
-  return buffer
-
-
-# --- INTERFAZ STREAMLIT ---
-modo = st.radio(
-    "Modo de operación:",
-    ["Consulta automática ITC", "Carga manual (Respaldo por bloqueo IP)"],
-)
-
-if modo == "Consulta automática ITC":
-  nomenclatura_input = st.text_input(
-      "Nomenclatura Catastral (15 dígitos):", value="092007835750000"
-  )
-
-  if st.button("Consultar Parcelas en ITC", type="primary"):
-    with st.spinner("Conectando con el ITC de Catastro..."):
-      data, error = consultar_itc(nomenclatura_input)
-      if error:
-        st.error(error)
-      else:
-        st.session_state["parcela"] = data
-
-else:
-  st.info(
-      "Modo manual activado: ingrese los datos de la parcela para generar el"
-      " presupuesto."
-  )
-  nom_man = st.text_input(
-      "Nomenclatura Catastral:", value="09-20-078-3575-0000"
-  )
-  ubic_man = st.text_input(
-      "Ubicación / Loteo:", value="Bº Bardas Soleadas - Neuquén"
-  )
-  plano_man = st.text_input("Plano Antecedente / Trámite:", value="1234/2024")
-
-  if st.button("Cargar Datos Manuales", type="primary"):
-    st.session_state["parcela"] = {
-        "nomenclatura": nom_man,
-        "plano_antecedente": plano_man,
-        "ubicacion_loteo": ubic_man,
-        "lote": "-",
-        "manzana": "-",
-        "sup_mensura": 0,
-        "google_maps_url": "",
-    }
-    st.success("¡Datos de parcela cargados manualmente con éxito!")
-
-if "parcela" in st.session_state:
-  p = st.session_state["parcela"]
-  st.success("Parcela activa en sistema:")
-
-  st.markdown(f"**Ubicación:** {p['ubicacion_loteo']}")
-  st.markdown(f"**Plano Antecedente:** :orange[**{p['plano_antecedente']}**]")
-
-  st.divider()
-  st.subheader("Armar Presupuesto Automático")
-  cliente = st.text_input("Nombre del Comitente / Cliente:", value="Juan Pérez")
-
-  es_rui_rue = st.checkbox(
-      "¿Es trámite RUI o RUE? (Modifica forma de pago a 50% anticipo / 50%"
-      " saldo)"
-  )
-
-  col1, col2 = st.columns(2)
-  with col1:
-    monto_vep = st.text_input("Honorarios VEP ($):", value="500.000")
-  with col2:
-    monto_cda = st.text_input("Honorarios CDA ($):", value="450.000")
-
-  col_btn1, col_btn2 = st.columns(2)
-  with col_btn1:
-    if st.button("📄 Generar PDF VEP"):
-      pdf_buffer = generar_pdf(
-          "VEP",
-          cliente,
-          p["nomenclatura"],
-          monto_vep,
-          p["ubicacion_loteo"],
-          es_rui_rue,
-      )
-      st.download_button(
-          label="⬇️ Descargar PDF VEP",
-          data=pdf_buffer,
-          file_name=f"Presupuesto_VEP_{p['nomenclatura']}.pdf",
-          mime="application/pdf",
-      )
-
-  with col_btn2:
-    if st.button("📄 Generar PDF CDA"):
-      pdf_buffer = generar_pdf(
-          "CDA",
-          cliente,
-          p["nomenclatura"],
-          monto_cda,
-          p["ubicacion_loteo"],
-          es_rui_rue,
-      )
-      st.download_button(
-          label="⬇️ Descargar PDF CDA",
-          data=pdf_buffer,
-          file_name=f"Presupuesto_CDA_{p['nomenclatura']}.pdf",
-          mime="application/pdf",
-      )
+      40, height - 355, f

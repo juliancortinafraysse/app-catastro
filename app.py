@@ -160,29 +160,4 @@ def generar_pdf(
   # --- CUERPO DEL PRESUPUESTO ---
   p.setFont("Helvetica", 10)
   p.setFillColorRGB(0.2, 0.2, 0.2)
-  p.drawString(
-      40,
-      height - 210,
-      "Me dirijo a Ud. a fin de elevar la propuesta de honorarios profesionales"
-      " por los trabajos técnicos",
-  )
-  p.drawString(40, height - 225, "que se detallan a continuación:")
-
-  p.setFillColorRGB(0.96, 0.97, 0.99)
-  p.rect(40, height - 315, width - 80, 75, stroke=1, fill=1)
-
-  p.setFont("Helvetica-Bold", 10)
-  p.setFillColorRGB(0.1, 0.2, 0.35)
-  p.drawString(55, height - 250, "DETALLE TÉCNICO DE LA PARCELA")
-
-  p.setFont("Helvetica", 10)
-  p.setFillColorRGB(0.2, 0.2, 0.2)
-  p.drawString(55, height - 270, f"• Objeto: {titulo}")
-  p.drawString(55, height - 286, f"• Nomenclatura Catastral: {nomenclatura}")
-  p.drawString(55, height - 302, f"• Ubicación / Loteo: {ubicacion}")
-
-  # --- HONORARIOS ---
-  p.setFont("Helvetica-Bold", 12)
-  p.setFillColorRGB(0.1, 0.2, 0.35)
-  p.drawString(
-      40, height - 355, f
+  p.

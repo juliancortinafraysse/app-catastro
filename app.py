@@ -82,6 +82,9 @@ def consultar_itc(nomenclatura):
           lon = sum(pt[0] for pt in rings) / len(rings)
           lat = sum(pt[1] for pt in rings) / len(rings)
 
+    # Enlaces directos a documentos y fichas de mensura/expedientes en el ITC
+    doc_url = f"{ITC_BASE}/site/Documentos/VerDocumento.aspx?nomen={nomen_limpia}&tramite={tramite}"
+
     resultado = {
         "nomenclatura": parcela.get("Nomenclatura"),
         "plano_antecedente": tramite,
@@ -95,9 +98,7 @@ def consultar_itc(nomenclatura):
             if lat and lon
             else ""
         ),
-        "itc_portal_url": (
-            f"{ITC_BASE}/portal/apps/webappviewer/index.html?id=63f0c3f9a047425280951f418621171f&nomenclatura={nomen_limpia}"
-        ),
+        "documento_url": doc_url,
     }
     return resultado, None
   except Exception as e:
@@ -241,4 +242,36 @@ def generar_pdf(
 
 # --- INTERFAZ PRINCIPAL ---
 nomenclatura_input = st.text_input(
-    "
+    "Nomenclatura Catastral (15 dígitos):", value="092007849780000"
+)
+
+if st.button("Consultar Automático (ITC)", type="primary"):
+  with st.spinner("Conectando con Catastro Neuquén..."):
+    data, error = consultar_itc(nomenclatura_input)
+    if error:
+      st.error(error)
+    else:
+      st.session_state["parcela"] = data
+
+if "parcela" in st.session_state:
+  p = st.session_state["parcela"]
+  st.success("¡Datos de parcela obtenidos con éxito desde Catastro!")
+
+  st.markdown(f"**Ubicación / Loteo:** {p['ubicacion_loteo']}")
+  st.markdown(
+      f"**Plano Antecedente (Mensura):** :orange[**{p['plano_antecedente']}**]"
+  )
+
+  es_rui = p.get("es_rui_rue", False)
+  st.markdown(
+      f"**Clasificación RUI / RUE (Catastro):**"
+      f" `{'Sí (Rural)' if es_rui else 'No (Urbana / Estándar)'}`"
+  )
+
+  col_link1, col_link2 = st.columns(2)
+  with col_link1:
+    if p.get("documento_url"):
+      st.markdown(
+          f"<a href='{p['documento_url']}' target='_blank'"
+          " style='display:block; text-align:center; background:#2b6cb0;"
+          " color:white; padding:10px; border-radius:6px; text-

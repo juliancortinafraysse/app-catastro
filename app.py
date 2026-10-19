@@ -61,11 +61,9 @@ def consultar_itc(nomenclatura):
     object_id = parcela.get("ObjectId")
     service_id = parcela.get("ServiceId", 7)
 
-    # Identificación automática de RUI o RUE
     desc_catastro = f"{parcela.get('UbicacionLoteo', '')} {parcela.get('Tramite', '')} {parcela.get('DenominacionLote', '')}".upper(
     )
     es_rui_rue = "RUI" in desc_catastro or "RUE" in desc_catastro
-
     tramite = parcela.get("Tramite") or "Sin antecedente"
 
     lat, lon = None, None
@@ -116,19 +114,4 @@ def generar_pdf(
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
   pdf.rect(0, h - 40, w, 40, stroke=0, fill=1)
   pdf.setFillColorRGB(1, 1, 1)
-  pdf.setFont("Helvetica-Bold", 12)
-  pdf.drawString(40, h - 26, "ESTUDIO DE AGRIMENSURA JCF")
-
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-  pdf.setFont("Helvetica-Bold", 11)
-  pdf.drawString(40, h - 65, "Ing. Agrim. Julián Cortina Fraysse")
-  pdf.setFont("Helvetica", 9)
-  pdf.setFillColorRGB(0.4, 0.4, 0.4)
-  pdf.drawString(
-      40, h - 80, "Matrícula Profesional AGR. 382 (Neuquén) | JCF Estudio"
-  )
-  pdf.drawString(40, h - 93, "Tel: 299-4116680 | juliancortinafraysse@gmail.com")
-
-  pdf.setStrokeColorRGB(0.8, 0.8, 0.8)
-  pdf.setLineWidth(0.75)
-  pdf.line(40, h
+  pdf.setFont("Helvetica-Bold", 1

@@ -1,2 +1,4 @@
 reportlab
 requests
+fastapi
+uvicorn

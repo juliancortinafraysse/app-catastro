@@ -60,10 +60,18 @@ def consultar_itc(nomenclatura):
     object_id = parcela.get("ObjectId")
     service_id = parcela.get("ServiceId", 7)
 
-    desc_catastro = f"{parcela.get('UbicacionLoteo', '')} {parcela.get('Tramite', '')} {parcela.get('DenominacionLote', '')}".upper(
+    # Barrido completo para detectar RUI / RUE de forma infalible
+    texto_parcela = " ".join([str(v) for v in parcela.values()]).upper()
+    es_rui_rue = (
+        "RUI" in texto_parcela
+        or "RURAL INTENSIVA" in texto_parcela
+        or "RUE" in texto_parcela
+        or "RURAL EXTENSIVA" in texto_parcela
     )
-    es_rui_rue = "RUI" in desc_catastro or "RUE" in desc_catastro
+
     tramite = parcela.get("Tramite") or "Sin antecedente"
+
+    documento_url = f"{ITC_BASE}/portal/apps/webappviewer/index.html?id=63f0c3f9a047425280951f418621171f&nomenclatura={nomen_limpia}"
 
     lat, lon = None, None
     if object_id:
@@ -81,8 +89,6 @@ def consultar_itc(nomenclatura):
           lon = sum(pt[0] for pt in rings) / len(rings)
           lat = sum(pt[1] for pt in rings) / len(rings)
 
-    doc_url = f"{ITC_BASE}/site/Documentos/VerDocumento.aspx?nomen={nomen_limpia}&tramite={tramite}"
-
     resultado = {
         "nomenclatura": parcela.get("Nomenclatura"),
         "plano_antecedente": tramite,
@@ -96,20 +102,19 @@ def consultar_itc(nomenclatura):
             if lat and lon
             else ""
         ),
-        "documento_url": doc_url,
+        "documento_url": documento_url,
     }
     return resultado, None
   except Exception as e:
     return None, f"Error de conexión con el servidor: {str(e)}"
 
 
-def generar_pdf(
-    tipo, cliente, nomenclatura, honorarios, ubicacion, plano, es_rui_rue
-):
+def generar_pdf(tipo, cliente, nomenclatura, honorarios, ubicacion, es_rui_rue):
   buffer = io.BytesIO()
   pdf = canvas.Canvas(buffer, pagesize=A4)
   w, h = A4
 
+  # Encabezado corporativo JCF
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
   pdf.rect(0, h - 40, w, 40, stroke=0, fill=1)
   pdf.setFillColorRGB(1, 1, 1)
@@ -130,6 +135,7 @@ def generar_pdf(
   pdf.setLineWidth(0.75)
   pdf.line(40, h - 105, w - 40, h - 105)
 
+  # Fecha y Comitente
   fecha = datetime.now().strftime("%d de octubre de 2026")
   pdf.setFont("Helvetica", 10)
   pdf.setFillColorRGB(0.2, 0.2, 0.2)
@@ -148,6 +154,7 @@ def generar_pdf(
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
   pdf.drawString(40, h - 182, f"REF.: PROPUESTA DE HONORARIOS - {titulo}")
 
+  # Cuerpo técnico (Sin sombra gris y sin plano antecedente)
   pdf.setFont("Helvetica", 10)
   pdf.setFillColorRGB(0.2, 0.2, 0.2)
   pdf.drawString(
@@ -157,174 +164,62 @@ def generar_pdf(
       " por los trabajos técnicos:",
   )
 
-  pdf.setFillColorRGB(0.96, 0.97, 0.99)
-  pdf.rect(40, h - 330, w - 80, 90, stroke=1, fill=1)
   pdf.setFont("Helvetica-Bold", 10)
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(55, h - 245, "DETALLE TÉCNICO DE LA PARCELA")
+  pdf.drawString(40, h - 245, "DETALLE TÉCNICO DE LA PARCELA")
 
   pdf.setFont("Helvetica", 10)
   pdf.setFillColorRGB(0.2, 0.2, 0.2)
-  pdf.drawString(55, h - 265, f"Objeto: {titulo}")
-  pdf.drawString(55, h - 285, f"Nomenclatura Catastral: {nomenclatura}")
-  pdf.drawString(55, h - 305, f"Ubicacion / Loteo: {ubicacion}")
-  pdf.drawString(55, h - 320, f"Plano Antecedente: {plano}")
+  pdf.drawString(40, h - 265, f"Objeto: {titulo}")
+  pdf.drawString(40, h - 285, f"Nomenclatura Catastral: {nomenclatura}")
+  pdf.drawString(40, h - 305, f"Ubicacion / Loteo: {ubicacion}")
 
   pdf.setFont("Helvetica-Bold", 12)
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 370, f"Honorarios Profesionales Totales: ${honorarios}")
+  pdf.drawString(40, h - 355, f"Honorarios Profesionales Totales: ${honorarios}")
 
   pdf.setFont("Helvetica-Bold", 10)
-  pdf.drawString(40, h - 400, "Los honorarios profesionales incluyen:")
+  pdf.drawString(40, h - 385, "Los honorarios profesionales incluyen:")
   pdf.setFont("Helvetica", 10)
   if tipo == "VEP":
     pdf.drawString(
-        55, h - 418, "- Relevamiento planimétrico y verificación en terreno."
+        40, h - 403, "- Relevamiento planimétrico y verificación en terreno."
     )
     pdf.drawString(
-        55, h - 433, "- Confección y tramitación digital de la VEP en DPCeIT."
+        40, h - 418, "- Confección y tramitación digital de la VEP en DPCeIT."
     )
-    pdf.drawString(55, h - 448, "- Obtención del Certificado Catastral.")
+    pdf.drawString(40, h - 433, "- Obtención del Certificado Catastral.")
   else:
-    pdf.drawString(55, h - 418, "- Relevamiento de antecedentes y mensura.")
-    pdf.drawString(55, h - 433, "- Replanteo y amojonamiento perimetral.")
-    pdf.drawString(55, h - 448, "- Confección y visado del CDA municipal.")
+    pdf.drawString(40, h - 403, "- Relevamiento de antecedentes y mensura.")
+    pdf.drawString(40, h - 418, "- Replanteo y amojonamiento perimetral.")
+    pdf.drawString(40, h - 433, "- Confección y visado del CDA municipal.")
 
   pdf.setFont("Helvetica-Bold", 10)
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 480, "Formas de Pago y Plazos de Ejecucion:")
+  pdf.drawString(40, h - 465, "Formas de Pago y Plazos de Ejecucion:")
   pdf.setFont("Helvetica", 10)
   pdf.setFillColorRGB(0.2, 0.2, 0.2)
 
   if es_rui_rue:
     pdf.drawString(
-        55, h - 498, "- 50% de anticipo al inicio de tareas tecnicas."
+        40, h - 483, "- 50% de anticipo al inicio de tareas tecnicas."
     )
     pdf.drawString(
-        55,
-        h - 513,
+        40,
+        h - 498,
         "- 50% restante contra entrega de la documentacion aprobada.",
     )
   else:
-    pdf.drawString(55, h - 498, "- Pago unico contra entrega de documentacion.")
+    pdf.drawString(40, h - 483, "- Pago unico contra entrega de documentacion.")
 
-  pdf.drawString(55, h - 528, "- Plazo estimado: 15 a 20 dias habiles.")
-  pdf.drawString(55, h - 543, "- Validez de la propuesta: 10 dias corridos.")
+  pdf.drawString(40, h - 513, "- Plazo estimado: 15 a 20 dias habiles.")
+  pdf.drawString(40, h - 528, "- Validez de la propuesta: 10 dias corridos.")
 
-  pdf.drawString(40, h - 585, "Sin otro particular, saludo a Ud. atentamente,")
+  pdf.drawString(40, h - 575, "Sin otro particular, saludo a Ud. atentamente,")
   pdf.setFont("Helvetica-Bold", 10)
-  pdf.drawString(40, h - 645, "Ing. Agrim. Julián Cortina Fraysse")
+  pdf.drawString(40, h - 635, "Ing. Agrim. Julián Cortina Fraysse")
   pdf.setFont("Helvetica", 9)
   pdf.setFillColorRGB(0.4, 0.4, 0.4)
-  pdf.drawString(40, h - 658, "Matrícula Profesional AGR. 382")
+  pdf.drawString(40, h - 648, "Matrícula Profesional AGR. 382")
 
-  pdf.showPage()
-  pdf.save()
-  buffer.seek(0)
-  return buffer
-
-
-nomenclatura_input = st.text_input(
-    "Nomenclatura Catastral (15 dígitos):", value="092007849780000"
-)
-
-if st.button("Consultar Automático (ITC)", type="primary"):
-  with st.spinner("Conectando con Catastro Neuquén..."):
-    data, error = consultar_itc(nomenclatura_input)
-    if error:
-      st.error(error)
-    else:
-      st.session_state["parcela"] = data
-
-if "parcela" in st.session_state:
-  p = st.session_state["parcela"]
-  st.success("¡Datos de parcela obtenidos con éxito desde Catastro!")
-
-  st.markdown(f"**Ubicación / Loteo:** {p['ubicacion_loteo']}")
-  st.markdown(
-      f"**Plano Antecedente (Mensura):** :orange[**{p['plano_antecedente']}**]"
-  )
-
-  es_rui = p.get("es_rui_rue", False)
-  st.markdown(
-      f"**Clasificación RUI / RUE (Catastro):**"
-      f" `{'Sí (Rural)' if es_rui else 'No (Urbana / Estándar)'}`"
-  )
-
-  col_link1, col_link2 = st.columns(2)
-  with col_link1:
-    if p.get("documento_url"):
-      st.markdown(
-          f"<a href='{p['documento_url']}' target='_blank'"
-          " style='display:block; text-align:center; background:#2b6cb0;"
-          " color:white; padding:10px; border-radius:6px; text-decoration:none;"
-          " font-weight:bold;'>📄 Ver Documento / Plano de Mensura ITC</a>",
-          unsafe_allow_html=True,
-      )
-  with col_link2:
-    if p.get("google_maps_url"):
-      st.markdown(
-          f"<a href='{p['google_maps_url']}' target='_blank'"
-          " style='display:block; text-align:center; background:#319795;"
-          " color:white; padding:10px; border-radius:6px; text-decoration:none;"
-          " font-weight:bold;'>📍 Ver ubicación en Google Maps</a>",
-          unsafe_allow_html=True,
-      )
-
-  st.divider()
-  st.subheader("Armar Presupuesto Profesional Editable")
-  cliente = st.text_input(
-      "Nombre del Comitente / Cliente:", value="Juan Pérez"
-  )
-
-  col1, col2 = st.columns(2)
-  with col1:
-    monto_vep = st.text_input("Honorarios VEP ($):", value="500.000")
-  with col2:
-    monto_cda = st.text_input("Honorarios CDA ($):", value="450.000")
-
-  condicion_pago = (
-      "50% anticipo al inicio / 50% saldo contra entrega"
-      if es_rui
-      else "Pago único contra entrega"
-  )
-  st.info(f"📋 **Condición de pago automática aplicable:** {condicion_pago}")
-
-  st.markdown("### Generar y Descargar Presupuestos en PDF")
-  col_btn1, col_btn2 = st.columns(2)
-
-  with col_btn1:
-    if st.button("📄 Generar PDF VEP", type="primary"):
-      pdf_buffer = generar_pdf(
-          "VEP",
-          cliente,
-          p["nomenclatura"],
-          monto_vep,
-          p["ubicacion_loteo"],
-          p["plano_antecedente"],
-          es_rui,
-      )
-      st.download_button(
-          label="⬇️ Descargar Presupuesto VEP (PDF)",
-          data=pdf_buffer,
-          file_name=f"Presupuesto_VEP_{p['nomenclatura']}.pdf",
-          mime="application/pdf",
-      )
-
-  with col_btn2:
-    if st.button("📄 Generar PDF CDA", type="primary"):
-      pdf_buffer = generar_pdf(
-          "CDA",
-          cliente,
-          p["nomenclatura"],
-          monto_cda,
-          p["ubicacion_loteo"],
-          p["plano_antecedente"],
-          es_rui,
-      )
-      st.download_button(
-          label="⬇️ Descargar Presupuesto CDA (PDF)",
-          data=pdf_buffer,
-          file_name=f"Presupuesto_CDA_{p['nomenclatura']}.pdf",
-          mime="application/pdf",
-      )
+  pdf.showPage

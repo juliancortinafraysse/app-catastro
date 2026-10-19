@@ -9,18 +9,14 @@ st.set_page_config(
     page_title="Estudio JCF - Catastro Nqn", page_icon="📐", layout="centered"
 )
 
-st.markdown("""
-    <style>
-    .main { background-color: #f4f6f9; }
-    h1 { color: #1a365d; text-align: center; font-size: 24px; }
-    .subtitle { text-align: center; color: #718096; font-size: 14px; margin-bottom: 20px; }
-    </style>
-""", unsafe_allow_html=True)
-
-st.markdown("<h1>Estudio JCF - Catastro Nqn</h1>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='subtitle'>Consulta ITC y Generador de Presupuestos VEP /"
-    " CDA</div>",
+    "<h1 style='text-align: center; color: #1a365d;'>Estudio JCF - Catastro"
+    " Nqn</h1>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    "<p style='text-align: center; color: #718096;'>Consulta ITC y Generador"
+    " de Presupuestos VEP / CDA</p>",
     unsafe_allow_html=True,
 )
 
@@ -32,17 +28,12 @@ ITC_PASS = "juchu1988"
 def consultar_itc(nomenclatura):
   nomen_limpia = nomenclatura.replace("-", "").replace(" ", "").strip()
   session = requests.Session()
-
-  login_url = (
-      f"{ITC_BASE}/site/ITC.Services/Json/SecurityServiceJson.svc/json/PostAuthenticate"
-  )
+  login_url = f"{ITC_BASE}/site/ITC.Services/Json/SecurityServiceJson.svc/json/PostAuthenticate"
   headers = {
       "accept": "application/json, text/javascript, */*; q=0.01",
       "content-type": "application/json; charset=UTF-8",
       "origin": ITC_BASE,
-      "referer": (
-          f"{ITC_BASE}/portal/apps/webappviewer/index.html?id=63f0c3f9a047425280951f418621171f"
-      ),
+      "referer": f"{ITC_BASE}/portal/apps/webappviewer/index.html?id=63f0c3f9a047425280951f418621171f",
       "user-agent": (
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
           " like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -57,12 +48,10 @@ def consultar_itc(nomenclatura):
 
     url_alfa = f"{ITC_BASE}/site/ITC.Services/Json/ParcelaServiceJson.svc/json/GetByNomenclatura?nomen={nomen_limpia}&ph="
     r_alfa = session.get(url_alfa, headers=headers, timeout=15)
-    
     if r_alfa.status_code != 200:
       return None, "Catastro no respondió a la consulta de nomenclatura."
 
     datos_lista = r_alfa.json().get("GetByNomenclaturaResult", [])
-
     if not datos_lista:
       return None, "Nomenclatura no encontrada en el sistema de Catastro."
 
@@ -110,40 +99,36 @@ def generar_pdf(
     tipo, cliente, nomenclatura, honorarios, ubicacion, es_rui_rue
 ):
   buffer = io.BytesIO()
-  p = canvas.Canvas(buffer, pagesize=A4)
-  width, height = A4
+  pdf = canvas.Canvas(buffer, pagesize=A4)
+  w, h = A4
 
-  # --- ENCABEZADO PROFESIONAL ---
-  p.setFillColorRGB(0.1, 0.2, 0.35)
-  p.rect(0, height - 40, width, 40, stroke=0, fill=1)
+  # Encabezado
+  pdf.setFillColorRGB(0.1, 0.2, 0.35)
+  pdf.rect(0, h - 40, w, 40, stroke=0, fill=1)
+  pdf.setFillColorRGB(1, 1, 1)
+  pdf.setFont("Helvetica-Bold", 12)
+  pdf.drawString(40, h - 26, "ESTUDIO DE AGRIMENSURA JCF")
 
-  p.setFillColorRGB(1, 1, 1)
-  p.setFont("Helvetica-Bold", 12)
-  p.drawString(40, height - 26, "ESTUDIO DE AGRIMENSURA JCF")
-
-  p.setFillColorRGB(0.2, 0.2, 0.2)
-  p.setFont("Helvetica-Bold", 11)
-  p.drawString(40, height - 65, "Ing. Agrim. Julián Cortina Fraysse")
-
-  p.setFont("Helvetica", 9)
-  p.setFillColorRGB(0.4, 0.4, 0.4)
-  p.drawString(
-      40, height - 80, "Matrícula Profesional AGR. 382 (Neuquén) | JCF Estudio"
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+  pdf.setFont("Helvetica-Bold", 11)
+  pdf.drawString(40, h - 65, "Ing. Agrim. Julián Cortina Fraysse")
+  pdf.setFont("Helvetica", 9)
+  pdf.setFillColorRGB(0.4, 0.4, 0.4)
+  pdf.drawString(
+      40, h - 80, "Matrícula Profesional AGR. 382 (Neuquén) | JCF Estudio"
   )
-  p.drawString(
-      40, height - 93, "Tel: 299-4116680  |  juliancortinafraysse@gmail.com"
-  )
+  pdf.drawString(40, h - 93, "Tel: 299-4116680 | juliancortinafraysse@gmail.com")
 
-  p.setStrokeColorRGB(0.8, 0.8, 0.8)
-  p.setLineWidth(0.75)
-  p.line(40, height - 105, width - 40, height - 105)
+  pdf.setStrokeColorRGB(0.8, 0.8, 0.8)
+  pdf.setLineWidth(0.75)
+  pdf.line(40, h - 105, w - 40, h - 105)
 
-  # --- DATOS DEL COMITENTE Y FECHA ---
+  # Comitente y Fecha
   fecha = datetime.now().strftime("%d de octubre de 2026")
-  p.setFont("Helvetica", 10)
-  p.setFillColorRGB(0.2, 0.2, 0.2)
-  p.drawString(40, height - 130, f"Neuquén, {fecha}")
-  p.drawString(40, height - 148, f"Sr./Sra. Comitente: {cliente}")
+  pdf.setFont("Helvetica", 10)
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+  pdf.drawString(40, h - 130, f"Neuquén, {fecha}")
+  pdf.drawString(40, h - 148, f"Sr./Sra. Comitente: {cliente}")
 
   titulo = (
       "Verificación de Estado Parcelario (VEP)"
@@ -153,11 +138,167 @@ def generar_pdf(
   if es_rui_rue:
     titulo += " (RUI / RUE)"
 
-  p.setFont("Helvetica-Bold", 12)
-  p.setFillColorRGB(0.1, 0.2, 0.35)
-  p.drawString(40, height - 182, f"REF.: PROPUESTA DE HONORARIOS - {titulo}")
+  pdf.setFont("Helvetica-Bold", 12)
+  pdf.setFillColorRGB(0.1, 0.2, 0.35)
+  pdf.drawString(40, h - 182, f"REF.: PROPUESTA DE HONORARIOS - {titulo}")
 
-  # --- CUERPO DEL PRESUPUESTO ---
-  p.setFont("Helvetica", 10)
-  p.setFillColorRGB(0.2, 0.2, 0.2)
-  p.
+  # Cuerpo
+  pdf.setFont("Helvetica", 10)
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+  pdf.drawString(
+      40,
+      h - 210,
+      "Me dirijo a Ud. a fin de elevar la propuesta de honorarios profesionales"
+      " por los trabajos técnicos:",
+  )
+
+  pdf.setFillColorRGB(0.96, 0.97, 0.99)
+  pdf.rect(40, h - 315, w - 80, 75, stroke=1, fill=1)
+  pdf.setFont("Helvetica-Bold", 10)
+  pdf.setFillColorRGB(0.1, 0.2, 0.35)
+  pdf.drawString(55, h - 250, "DETALLE TÉCNICO DE LA PARCELA")
+
+  pdf.setFont("Helvetica", 10)
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+  pdf.drawString(55, h - 270, f"• Objeto: {titulo}")
+  pdf.drawString(55, h - 286, f"• Nomenclatura Catastral: {nomenclatura}")
+  pdf.drawString(55, h - 302, f"• Ubicación / Loteo: {ubicacion}")
+
+  pdf.setFont("Helvetica-Bold", 12)
+  pdf.setFillColorRGB(0.1, 0.2, 0.35)
+  pdf.drawString(40, h - 355, f"Honorarios Profesionales Totales: ${honorarios}")
+
+  pdf.setFont("Helvetica-Bold", 10)
+  pdf.drawString(40, h - 385, "Los honorarios profesionales incluyen:")
+  pdf.setFont("Helvetica", 10)
+  if tipo == "VEP":
+    pdf.drawString(
+        55, h - 403, "• Relevamiento planimétrico y verificación en terreno."
+    )
+    pdf.drawString(
+        55, h - 418, "• Confección y tramitación digital de la VEP en DPCeIT."
+    )
+    pdf.drawString(55, h - 433, "• Obtención del Certificado Catastral.")
+  else:
+    pdf.drawString(55, h - 403, "• Relevamiento de antecedentes y mensura.")
+    pdf.drawString(55, h - 418, "• Replanteo y amojonamiento perimetral.")
+    pdf.drawString(55, h - 433, "• Confección y visado del CDA municipal.")
+
+  pdf.setFont("Helvetica-Bold", 10)
+  pdf.setFillColorRGB(0.1, 0.2, 0.35)
+  pdf.drawString(40, h - 465, "Formas de Pago y Plazos de Ejecución:")
+  pdf.setFont("Helvetica", 10)
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+
+  if es_rui_rue:
+    pdf.drawString(
+        55, h - 483, "• 50% de anticipo al inicio de las tareas técnicas."
+    )
+    pdf.drawString(
+        55,
+        h - 498,
+        "• 50% restante contra entrega de la documentación aprobada.",
+    )
+  else:
+    pdf.drawString(
+        55, h - 483, "• Pago único contra entrega de la documentación final."
+    )
+
+  pdf.drawString(55, h - 514, "• Plazo estimado: 15 a 20 días hábiles.")
+  pdf.drawString(55, h - 529, "• Validez de la propuesta: 10 días corridos.")
+
+  pdf.drawString(40, h - 575, "Sin otro particular, saludo a Ud. atentamente,")
+  pdf.setFont("Helvetica-Bold", 10)
+  pdf.drawString(40, h - 635, "Ing. Agrim. Julián Cortina Fraysse")
+  pdf.setFont("Helvetica", 9)
+  pdf.setFillColorRGB(0.4, 0.4, 0.4)
+  pdf.drawString(40, h - 648, "Matrícula Profesional AGR. 382")
+
+  pdf.showPage()
+  pdf.save()
+  buffer.seek(0)
+  return buffer
+
+
+# Interfaz Streamlit
+nomenclatura_input = st.text_input(
+    "Nomenclatura Catastral (15 dígitos):", value="092007835750000"
+)
+
+if st.button("Consultar Parcelas en ITC", type="primary"):
+  with st.spinner("Conectando con el ITC de Catastro..."):
+    data, error = consultar_itc(nomenclatura_input)
+    if error:
+      st.error(error)
+    else:
+      st.session_state["parcela"] = data
+
+if "parcela" in st.session_state:
+  p = st.session_state["parcela"]
+  st.success("¡Parcela encontrada con éxito!")
+
+  st.markdown(f"**Ubicación:** {p['ubicacion_loteo']}")
+  st.markdown(f"**Lote / Manzana:** Lote {p['lote']} - Mz {p['manzana']}")
+  st.markdown(f"**Superficie de Mensura:** {p['sup_mensura']} m²")
+  st.markdown(
+      f"**Plano Antecedente:** :orange[**{p['plano_antecedente']}**]"
+  )
+
+  if p["google_maps_url"]:
+    st.markdown(
+        f"<a href='{p['google_maps_url']}' target='_blank' style='display:block;"
+        " text-align:center; background:#319795; color:white; padding:10px;"
+        " border-radius:6px; text-decoration:none; font-weight:bold;'>📍 Abrir"
+        " ubicación exacta en Google Maps</a>",
+        unsafe_allow_html=True,
+    )
+
+  st.divider()
+  st.subheader("Armar Presupuesto Automático")
+  cliente = st.text_input("Nombre del Comitente / Cliente:", value="Juan Pérez")
+
+  es_rui_rue = st.checkbox(
+      "¿Es trámite RUI o RUE? (Modifica forma de pago a 50% anticipo / 50%"
+      " saldo)"
+  )
+
+  col1, col2 = st.columns(2)
+  with col1:
+    monto_vep = st.text_input("Honorarios VEP ($):", value="500.000")
+  with col2:
+    monto_cda = st.text_input("Honorarios CDA ($):", value="450.000")
+
+  col_btn1, col_btn2 = st.columns(2)
+  with col_btn1:
+    if st.button("📄 Generar PDF VEP"):
+      pdf_buffer = generar_pdf(
+          "VEP",
+          cliente,
+          p["nomenclatura"],
+          monto_vep,
+          p["ubicacion_loteo"],
+          es_rui_rue,
+      )
+      st.download_button(
+          label="⬇️ Descargar PDF VEP",
+          data=pdf_buffer,
+          file_name=f"Presupuesto_VEP_{p['nomenclatura']}.pdf",
+          mime="application/pdf",
+      )
+
+  with col_btn2:
+    if st.button("📄 Generar PDF CDA"):
+      pdf_buffer = generar_pdf(
+          "CDA",
+          cliente,
+          p["nomenclatura"],
+          monto_cda,
+          p["ubicacion_loteo"],
+          es_rui_rue,
+      )
+      st.download_button(
+          label="⬇️ Descargar PDF CDA",
+          data=pdf_buffer,
+          file_name=f"Presupuesto_CDA_{p['nomenclatura']}.pdf",
+          mime="application/pdf",
+      )

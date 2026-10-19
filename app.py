@@ -1,4 +1,4 @@
- from datetime import datetime
+from datetime import datetime
 import io
 import streamlit as st
 from reportlab.lib.pagesizes import A4
@@ -24,7 +24,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Credenciales fijas del ITC
 ITC_BASE = "https://catastro.neuquen.gov.ar"
 ITC_USER = "jfraysse"
 ITC_PASS = "juchu1988"
@@ -34,7 +33,6 @@ def consultar_itc(nomenclatura):
   nomen_limpia = nomenclatura.replace("-", "").replace(" ", "").strip()
   session = requests.Session()
 
-  # 1) Login
   login_url = (
       f"{ITC_BASE}/site/ITC.Services/Json/SecurityServiceJson.svc/json/PostAuthenticate"
   )
@@ -53,7 +51,6 @@ def consultar_itc(nomenclatura):
     if r_login.status_code != 200:
       return None, "Error de autenticación con el ITC de Catastro."
 
-    # 2) Parcela
     url_alfa = f"{ITC_BASE}/site/ITC.Services/Json/ParcelaServiceJson.svc/json/GetByNomenclatura?nomen={nomen_limpia}&ph="
     r_alfa = session.get(url_alfa, headers=headers, timeout=15)
     datos_lista = r_alfa.json().get("GetByNomenclaturaResult", [])
@@ -67,7 +64,6 @@ def consultar_itc(nomenclatura):
     object_id = parcela.get("ObjectId")
     service_id = parcela.get("ServiceId", 7)
 
-    # 3) GPS para Maps
     lat, lon = None, None
     if object_id:
       url_geo = (
@@ -190,7 +186,6 @@ def generar_pdf(tipo, cliente, nomenclatura, honorarios, ubicacion):
   return buffer
 
 
-# Interfaz de la App
 nomenclatura_input = st.text_input(
     "Nomenclatura Catastral (15 dígitos):", value="092007835750000"
 )

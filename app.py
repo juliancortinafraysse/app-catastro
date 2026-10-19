@@ -192,4 +192,25 @@ def generar_pdf(
 
   pdf.setFont("Helvetica-Bold", 10)
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 465, "Formas de Pago y Plazos
+  pdf.drawString(40, h - 465, "Formas de Pago y Plazos de Ejecución:")
+  pdf.setFont("Helvetica", 10)
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+
+  if es_rui_rue:
+    pdf.drawString(
+        55,
+        h - 483,
+        "• 50% de anticipo en concepto de inicio de tareas técnicas y de"
+        " gabinete.",
+    )
+    pdf.drawString(
+        55,
+        h - 498,
+        "• 50% restante contra entrega de la documentación técnica aprobada.",
+    )
+  else:
+    pdf.drawString(
+        55, h - 483, "• Pago único contra entrega de la documentación final."
+    )
+
+  pdf.drawString(55, h - 514, "• Plazo estimado de ejecución:

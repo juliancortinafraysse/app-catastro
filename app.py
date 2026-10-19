@@ -61,6 +61,11 @@ def consultar_itc(nomenclatura):
     object_id = parcela.get("ObjectId")
     service_id = parcela.get("ServiceId", 7)
 
+    # Detectar si es RUI o RUE según zona / descripción / trámite
+    descripcion_completa = f"{parcela.get('UbicacionLoteo', '')} {parcela.get('Tramite', '')}".upper(
+    )
+    es_rui_rue = "RUI" in descripcion_completa or "RUE" in descripcion_completa
+
     lat, lon = None, None
     if object_id:
       url_geo = (
@@ -84,6 +89,7 @@ def consultar_itc(nomenclatura):
         "lote": parcela.get("DenominacionLote") or "-",
         "manzana": parcela.get("DenominacionManzana") or "-",
         "sup_mensura": parcela.get("SupMensura") or 0,
+        "es_rui_rue": es_rui_rue,
         "google_maps_url": (
             f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
             if lat and lon
@@ -92,10 +98,7 @@ def consultar_itc(nomenclatura):
     }
     return resultado, None
   except Exception as e:
-    return (
-        None,
-        "Bloqueo temporal de IP en nube. Utilice los datos de respaldo abajo.",
-    )
+    return None, f"Error de conexión con el servidor: {str(e)}"
 
 
 def generar_pdf(
@@ -189,104 +192,4 @@ def generar_pdf(
 
   pdf.setFont("Helvetica-Bold", 10)
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 465, "Formas de Pago y Plazos de Ejecución:")
-  pdf.setFont("Helvetica", 10)
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-
-  if es_rui_rue:
-    pdf.drawString(
-        55,
-        h - 483,
-        "• 50% de anticipo en concepto de inicio de tareas técnicas y de"
-        " gabinete.",
-    )
-    pdf.drawString(
-        55,
-        h - 498,
-        "• 50% restante contra entrega de la documentación técnica aprobada.",
-    )
-  else:
-    pdf.drawString(
-        55, h - 483, "• Pago único contra entrega de la documentación final."
-    )
-
-  pdf.drawString(55, h - 514, "• Plazo estimado de ejecución: 15 a 20 días hábiles.")
-  pdf.drawString(55, h - 529, "• Validez de la presente propuesta: 10 días corridos.")
-
-  pdf.drawString(40, h - 575, "Sin otro particular, saludo a Ud. atentamente,")
-  pdf.setFont("Helvetica-Bold", 10)
-  pdf.drawString(40, h - 635, "Ing. Agrim. Julián Cortina Fraysse")
-  pdf.setFont("Helvetica", 9)
-  pdf.setFillColorRGB(0.4, 0.4, 0.4)
-  pdf.drawString(40, h - 648, "Matrícula Profesional AGR. 382")
-
-  pdf.showPage()
-  pdf.save()
-  buffer.seek(0)
-  return buffer
-
-
-# --- INTERFAZ PRINCIPAL ---
-nomenclatura_input = st.text_input(
-    "Nomenclatura Catastral (15 dígitos):", value="092007835750000"
-)
-
-col_q1, col_q2 = st.columns(2)
-with col_q1:
-  btn_auto = st.button("Consultar Automático (ITC)", type="primary")
-
-if btn_auto:
-  with st.spinner("Conectando con Catastro Neuquén..."):
-    data, error = consultar_itc(nomenclatura_input)
-    if error:
-      st.warning(error)
-      st.info(
-          "Complete los datos abajo para continuar con el presupuesto"
-          " inmediato:"
-      )
-      st.session_state["parcela"] = {
-          "nomenclatura": nomenclatura_input,
-          "plano_antecedente": "Pendiente / A verificar",
-          "ubicacion_loteo": "Neuquén Capital",
-          "lote": "-",
-          "manzana": "-",
-          "sup_mensura": 0,
-          "google_maps_url": "",
-      }
-    else:
-      st.session_state["parcela"] = data
-
-if "parcela" in st.session_state:
-  p = st.session_state["parcela"]
-  st.success("¡Datos de parcela cargados correctamente!")
-
-  # Permite verificar y ajustar los datos duros antes de presupuestar
-  p["ubicacion_loteo"] = st.text_input(
-      "Ubicación / Loteo:", value=p["ubicacion_loteo"]
-  )
-  p["plano_antecedente"] = st.text_input(
-      "Plano Antecedente / Trámite:", value=p["plano_antecedente"]
-  )
-
-  if p["google_maps_url"]:
-    st.markdown(
-        f"<a href='{p['google_maps_url']}' target='_blank' style='display:block;"
-        " text-align:center; background:#319795; color:white; padding:10px;"
-        " border-radius:6px; text-decoration:none; font-weight:bold;'>📍 Ver"
-        " ubicación exacta en Google Maps</a>",
-        unsafe_allow_html=True,
-    )
-
-  st.divider()
-  st.subheader("Armar Presupuesto Profesional")
-  cliente = st.text_input(
-      "Nombre del Comitente / Cliente:", value="Juan Pérez"
-  )
-
-  es_rui_rue = st.checkbox(
-      "¿Es trámite RUI o RUE? (Aplica forma de pago 50% anticipo / 50% saldo)"
-  )
-
-  col1, col2 = st.columns(2)
-  with col1:
-    m
+  pdf.drawString(40, h - 465,

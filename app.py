@@ -61,10 +61,10 @@ def consultar_itc(nomenclatura):
     object_id = parcela.get("ObjectId")
     service_id = parcela.get("ServiceId", 7)
 
-    # Detectar si es RUI o RUE según zona / descripción / trámite
-    descripcion_completa = f"{parcela.get('UbicacionLoteo', '')} {parcela.get('Tramite', '')}".upper(
+    # Identificación automática de RUI o RUE según Catastro
+    desc_catastro = f"{parcela.get('UbicacionLoteo', '')} {parcela.get('Tramite', '')} {parcela.get('DenominacionLote', '')}".upper(
     )
-    es_rui_rue = "RUI" in descripcion_completa or "RUE" in descripcion_completa
+    es_rui_rue = "RUI" in desc_catastro or "RUE" in desc_catastro
 
     lat, lon = None, None
     if object_id:
@@ -192,122 +192,4 @@ def generar_pdf(
 
   pdf.setFont("Helvetica-Bold", 10)
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 465, "Formas de Pago y Plazos de Ejecución:")
-  pdf.setFont("Helvetica", 10)
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-
-  if es_rui_rue:
-    pdf.drawString(
-        55,
-        h - 483,
-        "• 50% de anticipo en concepto de inicio de tareas técnicas y de"
-        " gabinete.",
-    )
-    pdf.drawString(
-        55,
-        h - 498,
-        "• 50% restante contra entrega de la documentación técnica aprobada.",
-    )
-  else:
-    pdf.drawString(
-        55, h - 483, "• Pago único contra entrega de la documentación final."
-    )
-
-  pdf.drawString(55, h - 514, "• Plazo estimado de ejecución: 15 a 20 días hábiles.")
-  pdf.drawString(55, h - 529, "• Validez de la presente propuesta: 10 días corridos.")
-
-  pdf.drawString(40, h - 575, "Sin otro particular, saludo a Ud. atentamente,")
-  pdf.setFont("Helvetica-Bold", 10)
-  pdf.drawString(40, h - 635, "Ing. Agrim. Julián Cortina Fraysse")
-  pdf.setFont("Helvetica", 9)
-  pdf.setFillColorRGB(0.4, 0.4, 0.4)
-  pdf.drawString(40, h - 648, "Matrícula Profesional AGR. 382")
-
-  pdf.showPage()
-  pdf.save()
-  buffer.seek(0)
-  return buffer
-
-
-# --- INTERFAZ PRINCIPAL ---
-nomenclatura_input = st.text_input(
-    "Nomenclatura Catastral (15 dígitos):", value="092007849780000"
-)
-
-if st.button("Consultar Automático (ITC)", type="primary"):
-  with st.spinner("Conectando con Catastro Neuquén..."):
-    data, error = consultar_itc(nomenclatura_input)
-    if error:
-      st.error(error)
-    else:
-      st.session_state["parcela"] = data
-
-if "parcela" in st.session_state:
-  p = st.session_state["parcela"]
-  st.success("¡Datos de parcela obtenidos con éxito desde Catastro!")
-
-  # Mostrar datos clave para verificación
-  st.markdown(f"**Ubicación / Loteo:** {p['ubicacion_loteo']}")
-  st.markdown(
-      f"**Plano Antecedente (Mensura):** :orange[**{p['plano_antecedente']}**]"
-  )
-  st.markdown(
-      f"**Clasificación RUI / RUE detectada:**"
-      f" `{'Sí (Rural)' if p['es_rui_rue'] else 'No (Urbana / Estándar)'}`"
-  )
-
-  if p["google_maps_url"]:
-    st.markdown(
-        f"<a href='{p['google_maps_url']}' target='_blank' style='display:block;"
-        " text-align:center; background:#319795; color:white; padding:10px;"
-        " border-radius:6px; text-decoration:none; font-weight:bold;'>📍 Abrir"
-        " ubicación exacta en Google Maps</a>",
-        unsafe_allow_html=True,
-    )
-
-  st.divider()
-  st.subheader("Armar Presupuesto Profesional Editable")
-  cliente = st.text_input(
-      "Nombre del Comitente / Cliente:", value="Juan Pérez"
-  )
-
-  col1, col2 = st.columns(2)
-  with col1:
-    monto_vep = st.text_input("Honorarios VEP ($):", value="500.000")
-  with col2:
-    monto_cda = st.text_input("Honorarios CDA ($):", value="450.000")
-
-  col_btn1, col_btn2 = st.columns(2)
-  with col_btn1:
-    if st.button("📄 Generar PDF VEP"):
-      pdf_buffer = generar_pdf(
-          "VEP",
-          cliente,
-          p["nomenclatura"],
-          monto_vep,
-          p["ubicacion_loteo"],
-          p["es_rui_rue"],
-      )
-      st.download_button(
-          label="⬇️ Descargar PDF VEP",
-          data=pdf_buffer,
-          file_name=f"Presupuesto_VEP_{p['nomenclatura']}.pdf",
-          mime="application/pdf",
-      )
-
-  with col_btn2:
-    if st.button("📄 Generar PDF CDA"):
-      pdf_buffer = generar_pdf(
-          "CDA",
-          cliente,
-          p["nomenclatura"],
-          monto_cda,
-          p["ubicacion_loteo"],
-          p["es_rui_rue"],
-      )
-      st.download_button(
-          label="⬇️ Descargar PDF CDA",
-          data=pdf_buffer,
-          file_name=f"Presupuesto_CDA_{p['nomenclatura']}.pdf",
-          mime="application/pdf",
-      )
+  pdf.drawString(40, h - 465, "Formas de Pago y Plazos

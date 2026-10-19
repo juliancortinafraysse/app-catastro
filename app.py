@@ -61,7 +61,6 @@ def consultar_itc(nomenclatura):
     object_id = parcela.get("ObjectId")
     service_id = parcela.get("ServiceId", 7)
 
-    # Identificación automática de RUI o RUE según Catastro
     desc_catastro = f"{parcela.get('UbicacionLoteo', '')} {parcela.get('Tramite', '')} {parcela.get('DenominacionLote', '')}".upper(
     )
     es_rui_rue = "RUI" in desc_catastro or "RUE" in desc_catastro
@@ -108,7 +107,6 @@ def generar_pdf(
   pdf = canvas.Canvas(buffer, pagesize=A4)
   w, h = A4
 
-  # Encabezado corporativo JCF
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
   pdf.rect(0, h - 40, w, 40, stroke=0, fill=1)
   pdf.setFillColorRGB(1, 1, 1)
@@ -129,7 +127,6 @@ def generar_pdf(
   pdf.setLineWidth(0.75)
   pdf.line(40, h - 105, w - 40, h - 105)
 
-  # Fecha y Comitente
   fecha = datetime.now().strftime("%d de octubre de 2026")
   pdf.setFont("Helvetica", 10)
   pdf.setFillColorRGB(0.2, 0.2, 0.2)
@@ -148,7 +145,6 @@ def generar_pdf(
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
   pdf.drawString(40, h - 182, f"REF.: PROPUESTA DE HONORARIOS - {titulo}")
 
-  # Cuerpo técnico
   pdf.setFont("Helvetica", 10)
   pdf.setFillColorRGB(0.2, 0.2, 0.2)
   pdf.drawString(
@@ -213,4 +209,39 @@ def generar_pdf(
         55, h - 483, "• Pago único contra entrega de la documentación final."
     )
 
-  pdf.drawString(55, h - 514, "• Plazo estimado de ejecución:
+  pdf.drawString(55, h - 514, "• Plazo estimado de ejecución: 15 a 20 días hábiles.")
+  pdf.drawString(55, h - 529, "• Validez de la presente propuesta: 10 días corridos.")
+
+  pdf.drawString(40, h - 575, "Sin otro particular, saludo a Ud. atentamente,")
+  pdf.setFont("Helvetica-Bold", 10)
+  pdf.drawString(40, h - 635, "Ing. Agrim. Julián Cortina Fraysse")
+  pdf.setFont("Helvetica", 9)
+  pdf.setFillColorRGB(0.4, 0.4, 0.4)
+  pdf.drawString(40, h - 648, "Matrícula Profesional AGR. 382")
+
+  pdf.showPage()
+  pdf.save()
+  buffer.seek(0)
+  return buffer
+
+
+nomenclatura_input = st.text_input(
+    "Nomenclatura Catastral (15 dígitos):", value="092007849780000"
+)
+
+if st.button("Consultar Automático (ITC)", type="primary"):
+  with st.spinner("Conectando con Catastro Neuquén..."):
+    data, error = consultar_itc(nomenclatura_input)
+    if error:
+      st.error(error)
+    else:
+      st.session_state["parcela"] = data
+
+if "parcela" in st.session_state:
+  p = st.session_state["parcela"]
+  st.success("¡Datos de parcela obtenidos con éxito desde Catastro!")
+
+  st.markdown(f"**Ubicación / Loteo:** {p['ubicacion_loteo']}")
+  st.markdown(
+      f"**Plano Antecedente (Mensura):** :orange[**{p['plano_antecedente']}**]"
+  )

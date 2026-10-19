@@ -111,7 +111,115 @@ def generar_pdf(
   pdf = canvas.Canvas(buffer, pagesize=A4)
   w, h = A4
 
+  # Encabezado corporativo JCF
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
   pdf.rect(0, h - 40, w, 40, stroke=0, fill=1)
   pdf.setFillColorRGB(1, 1, 1)
-  pdf.setFont("Helvetica-Bold", 1
+  pdf.setFont("Helvetica-Bold", 12)
+  pdf.drawString(40, h - 26, "ESTUDIO DE AGRIMENSURA JCF")
+
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+  pdf.setFont("Helvetica-Bold", 11)
+  pdf.drawString(40, h - 65, "Ing. Agrim. Julián Cortina Fraysse")
+  pdf.setFont("Helvetica", 9)
+  pdf.setFillColorRGB(0.4, 0.4, 0.4)
+  pdf.drawString(
+      40, h - 80, "Matrícula Profesional AGR. 382 (Neuquén) | JCF Estudio"
+  )
+  pdf.drawString(40, h - 93, "Tel: 299-4116680 | juliancortinafraysse@gmail.com")
+
+  pdf.setStrokeColorRGB(0.8, 0.8, 0.8)
+  pdf.setLineWidth(0.75)
+  pdf.line(40, h - 105, w - 40, h - 105)
+
+  # Fecha y Comitente
+  fecha = datetime.now().strftime("%d de octubre de 2026")
+  pdf.setFont("Helvetica", 10)
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+  pdf.drawString(40, h - 130, f"Neuquén, {fecha}")
+  pdf.drawString(40, h - 148, f"Sr./Sra. Comitente: {cliente}")
+
+  titulo = (
+      "Verificación de Estado Parcelario (VEP)"
+      if tipo == "VEP"
+      else "Certificado de Deslinde y Amojonamiento (CDA)"
+  )
+  if es_rui_rue:
+    titulo += " (RUI / RUE)"
+
+  pdf.setFont("Helvetica-Bold", 12)
+  pdf.setFillColorRGB(0.1, 0.2, 0.35)
+  pdf.drawString(40, h - 182, f"REF.: PROPUESTA DE HONORARIOS - {titulo}")
+
+  # Cuerpo técnico
+  pdf.setFont("Helvetica", 10)
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+  pdf.drawString(
+      40,
+      h - 210,
+      "Me dirijo a Ud. a fin de elevar la propuesta de honorarios profesionales"
+      " por los trabajos técnicos:",
+  )
+
+  pdf.setFillColorRGB(0.96, 0.97, 0.99)
+  pdf.rect(40, h - 315, w - 80, 75, stroke=1, fill=1)
+  pdf.setFont("Helvetica-Bold", 10)
+  pdf.setFillColorRGB(0.1, 0.2, 0.35)
+  pdf.drawString(55, h - 250, "DETALLE TÉCNICO DE LA PARCELA")
+
+  pdf.setFont("Helvetica", 10)
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+  pdf.drawString(55, h - 270, f"• Objeto: {titulo}")
+  pdf.drawString(55, h - 286, f"• Nomenclatura Catastral: {nomenclatura}")
+  pdf.drawString(55, h - 302, f"• Ubicación / Loteo: {ubicacion}")
+
+  pdf.setFont("Helvetica-Bold", 12)
+  pdf.setFillColorRGB(0.1, 0.2, 0.35)
+  pdf.drawString(40, h - 355, f"Honorarios Profesionales Totales: ${honorarios}")
+
+  pdf.setFont("Helvetica-Bold", 10)
+  pdf.drawString(40, h - 385, "Los honorarios profesionales incluyen:")
+  pdf.setFont("Helvetica", 10)
+  if tipo == "VEP":
+    pdf.drawString(
+        55, h - 403, "• Relevamiento planimétrico y verificación en terreno."
+    )
+    pdf.drawString(
+        55, h - 418, "• Confección y tramitación digital de la VEP en DPCeIT."
+    )
+    pdf.drawString(55, h - 433, "• Obtención del Certificado Catastral.")
+  else:
+    pdf.drawString(55, h - 403, "• Relevamiento de antecedentes y mensura.")
+    pdf.drawString(55, h - 418, "• Replanteo y amojonamiento perimetral.")
+    pdf.drawString(55, h - 433, "• Confección y visado del CDA municipal.")
+
+  pdf.setFont("Helvetica-Bold", 10)
+  pdf.setFillColorRGB(0.1, 0.2, 0.35)
+  pdf.drawString(40, h - 465, "Formas de Pago y Plazos de Ejecución:")
+  pdf.setFont("Helvetica", 10)
+  pdf.setFillColorRGB(0.2, 0.2, 0.2)
+
+  if es_rui_rue:
+    pdf.drawString(
+        55,
+        h - 483,
+        "• 50% de anticipo en concepto de inicio de tareas técnicas y de"
+        " gabinete.",
+    )
+    pdf.drawString(
+        55,
+        h - 498,
+        "• 50% restante contra entrega de la documentación técnica aprobada.",
+    )
+  else:
+    pdf.drawString(
+        55, h - 483, "• Pago único contra entrega de la documentación final."
+    )
+
+  pdf.drawString(55, h - 514, "• Plazo estimado de ejecución: 15 a 20 días hábiles.")
+  pdf.drawString(55, h - 529, "• Validez de la presente propuesta: 10 días corridos.")
+
+  pdf.drawString(40, h - 575, "Sin otro particular, saludo a Ud. atentamente,")
+  pdf.setFont("Helvetica-Bold", 10)
+  pdf.drawString(40, h - 635, "Ing. Agrim. Julián Cortina Fraysse")
+  pdf

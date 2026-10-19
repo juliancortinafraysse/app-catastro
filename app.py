@@ -61,9 +61,12 @@ def consultar_itc(nomenclatura):
     object_id = parcela.get("ObjectId")
     service_id = parcela.get("ServiceId", 7)
 
+    # Identificación automática de RUI o RUE
     desc_catastro = f"{parcela.get('UbicacionLoteo', '')} {parcela.get('Tramite', '')} {parcela.get('DenominacionLote', '')}".upper(
     )
     es_rui_rue = "RUI" in desc_catastro or "RUE" in desc_catastro
+
+    tramite = parcela.get("Tramite") or "Sin antecedente"
 
     lat, lon = None, None
     if object_id:
@@ -83,7 +86,7 @@ def consultar_itc(nomenclatura):
 
     resultado = {
         "nomenclatura": parcela.get("Nomenclatura"),
-        "plano_antecedente": parcela.get("Tramite") or "Sin antecedente",
+        "plano_antecedente": tramite,
         "ubicacion_loteo": parcela.get("UbicacionLoteo") or "-",
         "lote": parcela.get("DenominacionLote") or "-",
         "manzana": parcela.get("DenominacionManzana") or "-",
@@ -93,6 +96,9 @@ def consultar_itc(nomenclatura):
             f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
             if lat and lon
             else ""
+        ),
+        "itc_portal_url": (
+            f"{ITC_BASE}/portal/apps/webappviewer/index.html?id=63f0c3f9a047425280951f418621171f&nomenclatura={nomen_limpia}"
         ),
     }
     return resultado, None
@@ -125,123 +131,4 @@ def generar_pdf(
 
   pdf.setStrokeColorRGB(0.8, 0.8, 0.8)
   pdf.setLineWidth(0.75)
-  pdf.line(40, h - 105, w - 40, h - 105)
-
-  fecha = datetime.now().strftime("%d de octubre de 2026")
-  pdf.setFont("Helvetica", 10)
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-  pdf.drawString(40, h - 130, f"Neuquén, {fecha}")
-  pdf.drawString(40, h - 148, f"Sr./Sra. Comitente: {cliente}")
-
-  titulo = (
-      "Verificación de Estado Parcelario (VEP)"
-      if tipo == "VEP"
-      else "Certificado de Deslinde y Amojonamiento (CDA)"
-  )
-  if es_rui_rue:
-    titulo += " (RUI / RUE)"
-
-  pdf.setFont("Helvetica-Bold", 12)
-  pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 182, f"REF.: PROPUESTA DE HONORARIOS - {titulo}")
-
-  pdf.setFont("Helvetica", 10)
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-  pdf.drawString(
-      40,
-      h - 210,
-      "Me dirijo a Ud. a fin de elevar la propuesta de honorarios profesionales"
-      " por los trabajos técnicos:",
-  )
-
-  pdf.setFillColorRGB(0.96, 0.97, 0.99)
-  pdf.rect(40, h - 315, w - 80, 75, stroke=1, fill=1)
-  pdf.setFont("Helvetica-Bold", 10)
-  pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(55, h - 250, "DETALLE TÉCNICO DE LA PARCELA")
-
-  pdf.setFont("Helvetica", 10)
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-  pdf.drawString(55, h - 270, f"• Objeto: {titulo}")
-  pdf.drawString(55, h - 286, f"• Nomenclatura Catastral: {nomenclatura}")
-  pdf.drawString(55, h - 302, f"• Ubicación / Loteo: {ubicacion}")
-
-  pdf.setFont("Helvetica-Bold", 12)
-  pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 355, f"Honorarios Profesionales Totales: ${honorarios}")
-
-  pdf.setFont("Helvetica-Bold", 10)
-  pdf.drawString(40, h - 385, "Los honorarios profesionales incluyen:")
-  pdf.setFont("Helvetica", 10)
-  if tipo == "VEP":
-    pdf.drawString(
-        55, h - 403, "• Relevamiento planimétrico y verificación en terreno."
-    )
-    pdf.drawString(
-        55, h - 418, "• Confección y tramitación digital de la VEP en DPCeIT."
-    )
-    pdf.drawString(55, h - 433, "• Obtención del Certificado Catastral.")
-  else:
-    pdf.drawString(55, h - 403, "• Relevamiento de antecedentes y mensura.")
-    pdf.drawString(55, h - 418, "• Replanteo y amojonamiento perimetral.")
-    pdf.drawString(55, h - 433, "• Confección y visado del CDA municipal.")
-
-  pdf.setFont("Helvetica-Bold", 10)
-  pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 465, "Formas de Pago y Plazos de Ejecución:")
-  pdf.setFont("Helvetica", 10)
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-
-  if es_rui_rue:
-    pdf.drawString(
-        55,
-        h - 483,
-        "• 50% de anticipo en concepto de inicio de tareas técnicas y de"
-        " gabinete.",
-    )
-    pdf.drawString(
-        55,
-        h - 498,
-        "• 50% restante contra entrega de la documentación técnica aprobada.",
-    )
-  else:
-    pdf.drawString(
-        55, h - 483, "• Pago único contra entrega de la documentación final."
-    )
-
-  pdf.drawString(55, h - 514, "• Plazo estimado de ejecución: 15 a 20 días hábiles.")
-  pdf.drawString(55, h - 529, "• Validez de la presente propuesta: 10 días corridos.")
-
-  pdf.drawString(40, h - 575, "Sin otro particular, saludo a Ud. atentamente,")
-  pdf.setFont("Helvetica-Bold", 10)
-  pdf.drawString(40, h - 635, "Ing. Agrim. Julián Cortina Fraysse")
-  pdf.setFont("Helvetica", 9)
-  pdf.setFillColorRGB(0.4, 0.4, 0.4)
-  pdf.drawString(40, h - 648, "Matrícula Profesional AGR. 382")
-
-  pdf.showPage()
-  pdf.save()
-  buffer.seek(0)
-  return buffer
-
-
-nomenclatura_input = st.text_input(
-    "Nomenclatura Catastral (15 dígitos):", value="092007849780000"
-)
-
-if st.button("Consultar Automático (ITC)", type="primary"):
-  with st.spinner("Conectando con Catastro Neuquén..."):
-    data, error = consultar_itc(nomenclatura_input)
-    if error:
-      st.error(error)
-    else:
-      st.session_state["parcela"] = data
-
-if "parcela" in st.session_state:
-  p = st.session_state["parcela"]
-  st.success("¡Datos de parcela obtenidos con éxito desde Catastro!")
-
-  st.markdown(f"**Ubicación / Loteo:** {p['ubicacion_loteo']}")
-  st.markdown(
-      f"**Plano Antecedente (Mensura):** :orange[**{p['plano_antecedente']}**]"
-  )
+  pdf.line(40, h

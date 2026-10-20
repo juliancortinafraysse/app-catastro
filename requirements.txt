@@ -1,3 +1,4 @@
-reportlab
-requests
-streamlit
+streamlit[pdf]>=1.49,<2
+requests>=2.31,<3
+reportlab>=4,<5
+Pillow>=10,<12

@@ -1,319 +1,392 @@
+"""Estudio JCF | Consultas ITC y presupuestos VEP/CDA.
+
+Versión revisada: no guarda credenciales en el código y no afirma obtener
+planos/VEP vigentes hasta disponer de una integración documentada y probada.
+"""
+
 from datetime import datetime
-import io
-import streamlit as st
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from html import escape
+from io import BytesIO
+import re
+import unicodedata
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
+
 import requests
+import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
-st.set_page_config(
-    page_title="Estudio JCF - Catastro Nqn", page_icon="📐", layout="centered"
-)
-
-st.markdown(
-    "<h1 style='text-align: center; color: #1a365d;'>Estudio JCF - Catastro"
-    " Nqn</h1>",
-    unsafe_allow_html=True,
-)
-st.markdown(
-    "<p style='text-align: center; color: #718096;'>Consulta ITC y Generador"
-    " de Presupuestos VEP / CDA</p>",
-    unsafe_allow_html=True,
-)
 
 ITC_BASE = "https://catastro.neuquen.gov.ar"
-ITC_USER = "jfraysse"
-ITC_PASS = "juchu1988"
-
-
-def consultar_itc(nomenclatura):
-  nomen_limpia = nomenclatura.replace("-", "").replace(" ", "").strip()
-  session = requests.Session()
-  login_url = f"{ITC_BASE}/site/ITC.Services/Json/SecurityServiceJson.svc/json/PostAuthenticate"
-  headers = {
-      "accept": "application/json, text/javascript, */*; q=0.01",
-      "content-type": "application/json; charset=UTF-8",
-      "origin": ITC_BASE,
-      "referer": f"{ITC_BASE}/portal/apps/webappviewer/index.html?id=63f0c3f9a047425280951f418621171f",
-      "user-agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-      ),
-  }
-  payload = {"user": ITC_USER, "pass": ITC_PASS}
-
-  try:
-    r_login = session.post(login_url, json=payload, headers=headers, timeout=10)
-    if r_login.status_code != 200:
-      return None, "Error de autenticación con el ITC de Catastro."
-
-    url_alfa = f"{ITC_BASE}/site/ITC.Services/Json/ParcelaServiceJson.svc/json/GetByNomenclatura?nomen={nomen_limpia}&ph="
-    r_alfa = session.get(url_alfa, headers=headers, timeout=10)
-    if r_alfa.status_code != 200:
-      return None, "Catastro no respondió a la consulta."
-
-    datos_lista = r_alfa.json().get("GetByNomenclaturaResult", [])
-    if not datos_lista:
-      return None, "Nomenclatura no encontrada en el sistema de Catastro."
-
-    parcela = next(
-        (p for p in datos_lista if p.get("Estado") == "A"), datos_lista[0]
-    )
-    object_id = parcela.get("ObjectId")
-    service_id = parcela.get("ServiceId", 7)
-
-    texto_parcela = " ".join([str(v) for v in parcela.values()]).upper()
-    es_rui_rue = (
-        "RUI" in texto_parcela
-        or "RURAL INTENSIVA" in texto_parcela
-        or "RUE" in texto_parcela
-        or "RURAL EXTENSIVA" in texto_parcela
-    )
-
-    documento_url = f"{ITC_BASE}/portal/apps/webappviewer/index.html?id=63f0c3f9a047425280951f418621171f&nomenclatura={nomen_limpia}"
-
-    lat, lon = None, None
-    if object_id:
-      url_geo = (
-          f"{ITC_BASE}/site/ITC.Services/proxy.ashx?"
-          f"{ITC_BASE}/server/rest/services/EditFeatures/FeatureServer/{service_id}/query?"
-          f"f=json&where=ObjectId%20%3D%20{object_id}&returnGeometry=true&outSR=4326&outFields=*"
-      )
-      r_geo = session.get(url_geo, headers=headers, timeout=10)
-      geo_json = r_geo.json()
-      features = geo_json.get("features", [])
-      if features and "geometry" in features[0]:
-        rings = features[0]["geometry"].get("rings", [[]])[0]
-        if rings:
-          lon = sum(pt[0] for pt in rings) / len(rings)
-          lat = sum(pt[1] for pt in rings) / len(rings)
-
-    resultado = {
-        "nomenclatura": parcela.get("Nomenclatura"),
-        "ubicacion_loteo": parcela.get("UbicacionLoteo") or "-",
-        "es_rui_rue": es_rui_rue,
-        "google_maps_url": (
-            f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-            if lat and lon
-            else ""
-        ),
-        "documento_url": documento_url,
-    }
-    return resultado, None
-  except Exception as e:
-    return None, f"Error de conexión con el servidor: {str(e)}"
-
-
-def generar_pdf(tipo, cliente, nomenclatura, honorarios, ubicacion, es_rui_rue):
-  buffer = io.BytesIO()
-  pdf = canvas.Canvas(buffer, pagesize=A4)
-  w, h = A4
-
-  pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.rect(0, h - 40, w, 40, stroke=0, fill=1)
-  pdf.setFillColorRGB(1, 1, 1)
-  pdf.setFont("Helvetica-Bold", 12)
-  pdf.drawString(40, h - 26, "ESTUDIO DE AGRIMENSURA JCF")
-
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-  pdf.setFont("Helvetica-Bold", 11)
-  pdf.drawString(40, h - 65, "Ing. Agrim. Julián Cortina Fraysse")
-  pdf.setFont("Helvetica", 9)
-  pdf.setFillColorRGB(0.4, 0.4, 0.4)
-  pdf.drawString(
-      40, h - 80, "Matrícula Profesional AGR. 382 (Neuquén) | JCF Estudio"
-  )
-  pdf.drawString(40, h - 93, "Tel: 299-4116680 | juliancortinafraysse@gmail.com")
-
-  pdf.setStrokeColorRGB(0.8, 0.8, 0.8)
-  pdf.setLineWidth(0.75)
-  pdf.line(40, h - 105, w - 40, h - 105)
-
-  fecha = datetime.now().strftime("%d de octubre de 2026")
-  pdf.setFont("Helvetica", 10)
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-  pdf.drawString(40, h - 130, f"Neuquén, {fecha}")
-  pdf.drawString(40, h - 148, f"Sr./Sra. Comitente: {cliente}")
-
-  titulo = (
-      "Verificación de Estado Parcelario (VEP)"
-      if tipo == "VEP"
-      else "Certificado de Deslinde y Amojonamiento (CDA)"
-  )
-  if es_rui_rue:
-    titulo += " (RUI / RUE)"
-
-  pdf.setFont("Helvetica-Bold", 12)
-  pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 182, f"REF.: PROPUESTA DE HONORARIOS - {titulo}")
-
-  pdf.setFont("Helvetica", 10)
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-  pdf.drawString(
-      40,
-      h - 210,
-      "Me dirijo a Ud. a fin de elevar la propuesta de honorarios profesionales"
-      " por los trabajos técnicos:",
-  )
-
-  pdf.setFont("Helvetica-Bold", 10)
-  pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 245, "DETALLE TÉCNICO DE LA PARCELA")
-
-  pdf.setFont("Helvetica", 10)
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-  pdf.drawString(40, h - 265, f"Objeto: {titulo}")
-  pdf.drawString(40, h - 285, f"Nomenclatura Catastral: {nomenclatura}")
-  pdf.drawString(40, h - 305, f"Ubicacion / Loteo: {ubicacion}")
-
-  pdf.setFont("Helvetica-Bold", 12)
-  pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 355, f"Honorarios Profesionales Totales: ${honorarios}")
-
-  pdf.setFont("Helvetica-Bold", 10)
-  pdf.drawString(40, h - 385, "Los honorarios profesionales incluyen:")
-  pdf.setFont("Helvetica", 10)
-  if tipo == "VEP":
-    pdf.drawString(
-        40, h - 403, "- Relevamiento planimétrico y verificación en terreno."
-    )
-    pdf.drawString(
-        40, h - 418, "- Confección y tramitación digital de la VEP en DPCeIT."
-    )
-    pdf.drawString(40, h - 433, "- Obtención del Certificado Catastral.")
-  else:
-    pdf.drawString(40, h - 403, "- Relevamiento de antecedentes y mensura.")
-    pdf.drawString(40, h - 418, "- Replanteo y amojonamiento perimetral.")
-    pdf.drawString(40, h - 433, "- Confección y visado del CDA municipal.")
-
-  pdf.setFont("Helvetica-Bold", 10)
-  pdf.setFillColorRGB(0.1, 0.2, 0.35)
-  pdf.drawString(40, h - 465, "Formas de Pago y Plazos de Ejecucion:")
-  pdf.setFont("Helvetica", 10)
-  pdf.setFillColorRGB(0.2, 0.2, 0.2)
-
-  if es_rui_rue:
-    pdf.drawString(
-        40, h - 483, "- 50% de anticipo al inicio de tareas tecnicas."
-    )
-    pdf.drawString(
-        40,
-        h - 498,
-        "- 50% restante contra entrega de la documentacion aprobada.",
-    )
-  else:
-    pdf.drawString(40, h - 483, "- Pago unico contra entrega de documentacion.")
-
-  pdf.drawString(40, h - 513, "- Plazo estimado: 15 a 20 dias habiles.")
-  pdf.drawString(40, h - 528, "- Validez de la propuesta: 10 dias corridos.")
-
-  pdf.drawString(40, h - 575, "Sin otro particular, saludo a Ud. atentamente,")
-  pdf.setFont("Helvetica-Bold", 10)
-  pdf.drawString(40, h - 635, "Ing. Agrim. Julián Cortina Fraysse")
-  pdf.setFont("Helvetica", 9)
-  pdf.setFillColorRGB(0.4, 0.4, 0.4)
-  pdf.drawString(40, h - 648, "Matrícula Profesional AGR. 382")
-
-  pdf.showPage()
-  pdf.save()
-  buffer.seek(0)
-  return buffer
-
-
-nomenclatura_input = st.text_input(
-    "Nomenclatura Catastral (15 dígitos):", value="092007824920000"
+ITC_PORTAL = f"{ITC_BASE}/itc"
+VISOR_BASE = (
+    f"{ITC_BASE}/portal/apps/webappviewer/index.html"
+    "?id=63f0c3f9a047425280951f418621171f"
 )
+TZ_NEUQUEN = ZoneInfo("America/Argentina/Salta")
+MESES = (
+    "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+    "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+)
+TIPOS_PARCELA = ["Sin determinar", "Urbana", "RUI", "ROE", "RUE", "Otra"]
+CLASES_RURALES = {"RUI", "ROE", "RUE"}  # Confirmar el uso de RUE con ITC.
 
-if st.button("Consultar Automático (ITC)", type="primary"):
-  with st.spinner("Conectando con Catastro Neuquén..."):
-    data, error = consultar_itc(nomenclatura_input)
-    if error:
-      st.error(error)
+
+# --- Consulta ITC ---
+
+def limpiar_nomenclatura(valor):
+    return re.sub(r"[\s-]", "", valor.strip())
+
+
+def normalizar(texto):
+    texto = unicodedata.normalize("NFKD", str(texto))
+    return "".join(c for c in texto if not unicodedata.combining(c)).upper()
+
+
+def detectar_clasificacion(parcela):
+    """Solo usa campos que parezcan describir clasificación; evita falsos positivos."""
+    pistas = ("TIPO", "CLASE", "CLASIF", "ZONA", "AREA", "AMBITO", "RURAL", "CATEGORIA")
+    valores = []
+    for clave, valor in parcela.items():
+        if any(pista in normalizar(clave) for pista in pistas) and valor is not None:
+            valores.append(normalizar(valor))
+    texto = " ".join(valores)
+    for sigla in ("RUI", "ROE", "RUE"):
+        if re.search(rf"\b{sigla}\b", texto):
+            return sigla
+    if "RURAL INTENSIVA" in texto:
+        return "RUI"
+    if "RURAL EXTENSIVA" in texto:
+        return "ROE"  # Etiqueta tentativa; confirmar la codificación real del ITC.
+    if re.search(r"\bURBANA?\b", texto):
+        return "Urbana"
+    return "Sin determinar"
+
+
+def centro_aproximado(rings):
+    """Centroide del anillo exterior; es orientación aproximada, no mensura."""
+    if not rings or len(rings[0]) < 3:
+        return None
+    puntos = rings[0]
+    if puntos[0] == puntos[-1]:
+        puntos = puntos[:-1]
+    if len(puntos) < 3:
+        return None
+    doble_area = 0.0
+    sx = sy = 0.0
+    for i, (x1, y1) in enumerate(puntos):
+        x2, y2 = puntos[(i + 1) % len(puntos)]
+        cruz = x1 * y2 - x2 * y1
+        doble_area += cruz
+        sx += (x1 + x2) * cruz
+        sy += (y1 + y2) * cruz
+    if abs(doble_area) < 1e-12:
+        x = sum(p[0] for p in puntos) / len(puntos)
+        y = sum(p[1] for p in puntos) / len(puntos)
     else:
-      st.session_state["parcela"] = data
+        x = sx / (3 * doble_area)
+        y = sy / (3 * doble_area)
+    if not (-180 <= x <= 180 and -90 <= y <= 90):
+        return None
+    return y, x  # latitud, longitud
+
+
+def consultar_itc(nomenclatura, usuario, contrasena):
+    numero = limpiar_nomenclatura(nomenclatura)
+    if not re.fullmatch(r"\d{15}", numero):
+        return None, "Ingresá una nomenclatura de 15 dígitos (con o sin guiones)."
+    if not usuario or not contrasena:
+        return None, "Faltan ITC_USER e ITC_PASS en los Secrets de Streamlit."
+
+    headers = {
+        "accept": "application/json, text/javascript, */*; q=0.01",
+        "content-type": "application/json; charset=UTF-8",
+        "origin": ITC_BASE,
+        "referer": VISOR_BASE,
+        "user-agent": "Mozilla/5.0 (compatible; EstudioJCF/1.0)",
+    }
+    try:
+        with requests.Session() as session:
+            session.headers.update(headers)
+            login = session.post(
+                f"{ITC_BASE}/site/ITC.Services/Json/SecurityServiceJson.svc/json/PostAuthenticate",
+                json={"user": usuario, "pass": contrasena},
+                timeout=15,
+            )
+            login.raise_for_status()
+            # El formato de éxito del login debe contrastarse con ITC real.
+            respuesta = session.get(
+                f"{ITC_BASE}/site/ITC.Services/Json/ParcelaServiceJson.svc/json/GetByNomenclatura",
+                params={"nomen": numero, "ph": ""}, timeout=15,
+            )
+            respuesta.raise_for_status()
+            contenido = respuesta.json()
+            lista = contenido.get("GetByNomenclaturaResult", []) if isinstance(contenido, dict) else []
+            if isinstance(lista, dict):
+                lista = [lista]
+            if not isinstance(lista, list):
+                return None, "El ITC devolvió una respuesta con un formato inesperado."
+            # No usar por error una parcela distinta devuelta en la lista.
+            candidatas = [
+                p for p in lista if isinstance(p, dict)
+                and limpiar_nomenclatura(str(p.get("Nomenclatura") or "")) == numero
+            ]
+            if not candidatas:
+                return None, "No se encontró una parcela con esa nomenclatura exacta."
+            activas = [p for p in candidatas if str(p.get("Estado", "")).upper() == "A"]
+            if not activas and any("Estado" in p for p in candidatas):
+                return None, "La parcela aparece en ITC, pero no se encontró un registro activo (Estado A)."
+            parcela = activas[0] if activas else candidatas[0]
+
+            latlon = None
+            object_id = parcela.get("ObjectId")
+            service_id = parcela.get("ServiceId") or 7  # Valor usado en la versión original.
+            if object_id is not None and re.fullmatch(r"\d+", str(object_id)) and re.fullmatch(r"\d+", str(service_id)):
+                try:
+                    url_geo = (
+                        f"{ITC_BASE}/site/ITC.Services/proxy.ashx?"
+                        f"{ITC_BASE}/server/rest/services/EditFeatures/FeatureServer/{service_id}/query?"
+                        f"f=json&where=ObjectId%20%3D%20{object_id}"
+                        "&returnGeometry=true&outSR=4326&outFields=*"
+                    )
+                    rg = session.get(url_geo, timeout=15)
+                    rg.raise_for_status()
+                    features = rg.json().get("features", [])
+                    if features:
+                        latlon = centro_aproximado(features[0].get("geometry", {}).get("rings", []))
+                except (requests.RequestException, ValueError, TypeError, KeyError):
+                    pass  # Un error geográfico no cancela el presupuesto.
+
+        return {
+            "nomenclatura": numero,
+            "ubicacion": str(parcela.get("UbicacionLoteo") or ""),
+            "clasificacion_detectada": detectar_clasificacion(parcela),
+            "estado": str(parcela.get("Estado") or "No informado"),
+            "google_maps_url": (
+                f"https://www.google.com/maps/search/?api=1&query={latlon[0]:.7f}%2C{latlon[1]:.7f}"
+                if latlon else ""
+            ),
+            # Conservamos el vínculo original, SIN asegurar que seleccione la parcela.
+            "visor_url": f"{VISOR_BASE}&nomenclatura={quote(numero)}",
+        }, None
+    except requests.Timeout:
+        return None, "Se agotó el tiempo de respuesta del ITC. Probá de nuevo."
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return None, "No se pudo completar la consulta al ITC. Revisá conexión, credenciales y formato de respuesta."
+
+
+# --- PDF de honorarios ---
+
+def leer_importe(texto):
+    """Admite 500000, 500.000 o 500.000,50 (formato argentino)."""
+    limpio = str(texto).replace("$", "").replace(" ", "").strip()
+    if not limpio or not re.fullmatch(r"\d[\d.,]*", limpio):
+        raise ValueError("Ingresá un importe numérico válido, por ejemplo 500.000.")
+    if "," in limpio:
+        limpio = limpio.replace(".", "").replace(",", ".")
+    elif "." in limpio:
+        partes = limpio.split(".")
+        if len(partes) > 2 or len(partes[-1]) == 3:
+            limpio = limpio.replace(".", "")
+    try:
+        importe = Decimal(limpio).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except InvalidOperation as exc:
+        raise ValueError("No pude interpretar el importe.") from exc
+    if importe <= 0:
+        raise ValueError("El importe debe ser mayor a cero.")
+    return importe
+
+
+def pesos(importe):
+    texto = f"{importe:,.2f}"
+    entero, decimal = texto.split(".")
+    entero = entero.replace(",", ".")
+    return f"$ {entero}" if decimal == "00" else f"$ {entero},{decimal}"
+
+
+def fecha_local():
+    ahora = datetime.now(TZ_NEUQUEN)
+    return ahora, f"{ahora.day} de {MESES[ahora.month - 1]} de {ahora.year}"
+
+
+def generar_pdf(tipo, cliente, nomenclatura, importe, ubicacion, clasificacion, observaciones=""):
+    ahora, fecha = fecha_local()
+    azul = colors.HexColor("#1a365d")
+    gris = colors.HexColor("#526176")
+    fondo = colors.HexColor("#f1f5f9")
+    estilos = getSampleStyleSheet()
+    estilos.add(ParagraphStyle(name="MarcaJCF", parent=estilos["Heading1"], fontName="Helvetica-Bold", fontSize=15, leading=18, textColor=azul, spaceAfter=6))
+    estilos.add(ParagraphStyle(name="SubJCF", parent=estilos["Normal"], fontSize=9, leading=13, textColor=gris))
+    estilos.add(ParagraphStyle(name="TituloJCF", parent=estilos["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=16, textColor=azul, spaceBefore=14, spaceAfter=9))
+    estilos.add(ParagraphStyle(name="CuerpoJCF", parent=estilos["Normal"], fontName="Helvetica", fontSize=10, leading=15, spaceAfter=7))
+    estilos.add(ParagraphStyle(name="MiniJCF", parent=estilos["Normal"], fontSize=9, leading=13))
+    e = lambda valor: escape(str(valor or "-"))
+    def p(texto, estilo="CuerpoJCF"):
+        return Paragraph(texto, estilos[estilo])
+
+    titulo = (
+        "Verificación de Estado Parcelario (VEP)"
+        if tipo == "VEP" else "Certificado de Línea de Mejoramiento (CDA)"
+    )
+    rural = clasificacion in CLASES_RURALES
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4, leftMargin=22*mm, rightMargin=22*mm,
+        topMargin=20*mm, bottomMargin=18*mm,
+        title=f"Presupuesto {tipo} - {nomenclatura}",
+        author="Estudio de Agrimensura JCF",
+    )
+    contenido = [
+        p("ESTUDIO DE AGRIMENSURA JCF", "MarcaJCF"),
+        p("Ing. Agrim. Julián Cortina Fraysse | Matrícula Profesional AGR. 382 (Neuquén)", "SubJCF"),
+        p("Tel.: 299-4116680 | juliancortinafraysse@gmail.com", "SubJCF"),
+        Spacer(1, 16),
+        p(f"Neuquén, {fecha}"),
+        p(f"<b>Comitente:</b> {e(cliente)}"),
+        p("PROPUESTA DE HONORARIOS PROFESIONALES", "TituloJCF"),
+        p(f"<b>Trabajo:</b> {e(titulo)}"),
+        p("DATOS DE LA PARCELA", "TituloJCF"),
+    ]
+    filas = [
+        [p("Nomenclatura", "MiniJCF"), p(e(nomenclatura), "MiniJCF")],
+        [p("Ubicación / Loteo", "MiniJCF"), p(e(ubicacion), "MiniJCF")],
+        [p("Clasificación", "MiniJCF"), p(e(clasificacion), "MiniJCF")],
+    ]
+    tabla = Table(filas, colWidths=[39*mm, 122*mm], hAlign="LEFT")
+    tabla.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (0,-1), fondo),
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+        ("LEFTPADDING", (0,0), (-1,-1), 8),
+        ("RIGHTPADDING", (0,0), (-1,-1), 8),
+        ("TOPPADDING", (0,0), (-1,-1), 8),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+        ("LINEBELOW", (0,0), (-1,-2), 0.4, colors.HexColor("#e2e8f0")),
+    ]))
+    contenido += [tabla, Spacer(1, 15), p("ALCANCE DE LOS TRABAJOS", "TituloJCF")]
+    tareas = (
+        ["Revisión de antecedentes y documentación parcelaria disponible.",
+         "Relevamiento y verificación en terreno.",
+         "Confección y gestión de la VEP ante la DPCeIT."]
+        if tipo == "VEP" else
+        ["Revisión de antecedentes catastrales y documentación disponible.",
+         "Verificación de la línea de mejoramiento conforme a la información oficial aplicable.",
+         "Preparación de la documentación correspondiente al certificado."]
+    )
+    for tarea in tareas:
+        contenido.append(p("• " + e(tarea)))
+    contenido += [
+        p("HONORARIOS", "TituloJCF"),
+        p(f"<b>Honorarios profesionales totales: {pesos(importe)}</b>"),
+        p("FORMA DE PAGO", "TituloJCF"),
+    ]
+    if rural:
+        anticipo = (importe * Decimal("0.5")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        saldo = importe - anticipo
+        contenido += [
+            p(f"50% al inicio de los trabajos: <b>{pesos(anticipo)}</b>."),
+            p(f"50% restante al finalizar los trabajos: <b>{pesos(saldo)}</b>."),
+        ]
+    else:
+        contenido.append(p("Pago único al finalizar los trabajos."))
+    if observaciones.strip():
+        contenido += [p("OBSERVACIONES", "TituloJCF"), p(e(observaciones).replace("\n", "<br/>"))]
+    contenido += [Spacer(1, 24), p("Sin otro particular, saludo atentamente."), Spacer(1, 24),
+                  p("<b>Ing. Agrim. Julián Cortina Fraysse</b>"), p("Matrícula Profesional AGR. 382", "MiniJCF")]
+    doc.build(contenido)
+    return buffer.getvalue()
+
+
+# --- Interfaz Streamlit ---
+st.set_page_config(page_title="Estudio JCF - Catastro Nqn", page_icon="📐", layout="centered")
+st.title("📐 Estudio JCF - Catastro Nqn")
+st.caption("Consulta ITC y presupuestos VEP / CDA en PDF")
+
+
+def limpiar_consulta():
+    for clave in ("parcela", "ubicacion_editable", "clasificacion_editable"):
+        st.session_state.pop(clave, None)
+
+
+nomen_input = st.text_input(
+    "Nomenclatura catastral (15 dígitos)", key="nomen_input",
+    placeholder="Ej.: 092007824920000", on_change=limpiar_consulta,
+)
+if st.button("Consultar parcela en ITC", type="primary"):
+    usuario = st.secrets.get("ITC_USER", "")
+    contrasena = st.secrets.get("ITC_PASS", "")
+    with st.spinner("Consultando Catastro Neuquén..."):
+        datos, error = consultar_itc(nomen_input, usuario, contrasena)
+    limpiar_consulta()
+    if error:
+        st.error(error)
+    else:
+        st.session_state["parcela"] = datos
+        st.session_state["ubicacion_editable"] = datos["ubicacion"]
+        st.session_state["clasificacion_editable"] = datos["clasificacion_detectada"]
 
 if "parcela" in st.session_state:
-  p = st.session_state["parcela"]
-  st.success("¡Datos de parcela obtenidos con éxito desde Catastro!")
+    parcela = st.session_state["parcela"]
+    st.success("Consulta parcelaria recibida desde ITC.")
+    st.write(f"**Nomenclatura:** {parcela['nomenclatura']}")
+    st.write(f"**Estado según respuesta:** {parcela['estado']}")
+    st.write(f"**Clasificación detectada:** {parcela['clasificacion_detectada']}")
+    if parcela["clasificacion_detectada"] == "Sin determinar":
+        st.warning("ITC no aportó una clasificación reconocible. Seleccionala manualmente antes de presupuestar.")
+    st.caption("La clasificación automática es orientativa hasta validar el campo específico de ITC.")
 
-  st.markdown(f"**Ubicación / Loteo:** {p['ubicacion_loteo']}")
-
-  es_rui = p.get("es_rui_rue", False)
-  st.markdown(
-      f"**Clasificación RUI / RUE (Catastro):**"
-      f" `{'Sí (Rural Intensiva/Extensiva)' if es_rui else 'No (Urbana / Estándar)'}`"
-  )
-
-  col_link1, col_link2 = st.columns(2)
-  with col_link1:
-    if p.get("documento_url"):
-      st.markdown(
-          f"<a href='{p['documento_url']}' target='_blank'"
-          " style='display:block; text-align:center; background:#2b6cb0;"
-          " color:white; padding:10px; border-radius:6px; text-decoration:none;"
-          " font-weight:bold;'>📄 Ver Ficha y Planos en Catastro Nqn</a>",
-          unsafe_allow_html=True,
-      )
-  with col_link2:
-    if p.get("google_maps_url"):
-      st.markdown(
-          f"<a href='{p['google_maps_url']}' target='_blank'"
-          " style='display:block; text-align:center; background:#319795;"
-          " color:white; padding:10px; border-radius:6px; text-decoration:none;"
-          " font-weight:bold;'>📍 Ver ubicación en Google Maps</a>",
-          unsafe_allow_html=True,
-      )
-
-  st.divider()
-  st.subheader("Armar Presupuesto Profesional Editable")
-  cliente = st.text_input(
-      "Nombre del Comitente / Cliente:", value="Juan Pérez"
-  )
-
-  col1, col2 = st.columns(2)
-  with col1:
-    monto_vep = st.text_input("Honorarios VEP ($):", value="500.000")
-  with col2:
-    monto_cda = st.text_input("Honorarios CDA ($):", value="450.000")
-
-  condicion_pago = (
-      "50% anticipo al inicio / 50% saldo contra entrega"
-      if es_rui
-      else "Pago único contra entrega"
-  )
-  st.info(f"📋 **Condición de pago automática aplicable:** {condicion_pago}")
-
-  st.markdown("### Generar y Descargar Presupuestos en PDF")
-  col_btn1, col_btn2 = st.columns(2)
-
-  with col_btn1:
-    if st.button("📄 Generar PDF VEP", type="primary"):
-      pdf_buffer = generar_pdf(
-          "VEP",
-          cliente,
-          p["nomenclatura"],
-          monto_vep,
-          p["ubicacion_loteo"],
-          es_rui,
-      )
-      st.download_button(
-          label="⬇️ Descargar Presupuesto VEP (PDF)",
-          data=pdf_buffer,
-          file_name=f"Presupuesto_VEP_{p['nomenclatura']}.pdf",
-          mime="application/pdf",
-      )
-
-  with col_btn2:
-    if st.button("📄 Generar PDF CDA", type="primary"):
-      pdf_buffer = generar_pdf(
-          "CDA",
-          cliente,
-          p["nomenclatura"],
-          monto_cda,
-          p["ubicacion_loteo"],
-          es_rui,
-      )
-      st.download_button(
-          label="⬇️ Descargar Presupuesto CDA (PDF)",
-          data=pdf_buffer,
-          file_name=f"Presupuesto_CDA_{p['nomenclatura']}.pdf",
-          mime="application/pdf",
-      )
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.link_button("Abrir visor ITC", parcela["visor_url"])
+    with col_b:
+        if parcela["google_maps_url"]:
+            st.link_button("📍 Ubicación aproximada", parcela["google_maps_url"])
+    st.caption("El enlace al visor NO está verificado como acceso directo al último plano. "
+               "Tampoco descarga todavía la VEP vigente.")
+    st.divider()
+    st.subheader("Presupuestos profesionales")
+    cliente = st.text_input("Nombre del comitente", placeholder="Completar nombre")
+    ubicacion = st.text_input("Ubicación / loteo (editable)", key="ubicacion_editable")
+    clasificacion = st.selectbox("Clasificación de parcela (revisar)", TIPOS_PARCELA, key="clasificacion_editable")
+    if clasificacion == "Sin determinar":
+        st.info("Confirmá la clasificación: ROE/RUI activa el pago 50% al inicio y 50% al final.")
+    if clasificacion == "RUE":
+        st.info("RUE se mantiene como opción heredada del código original; confirmá si corresponde a tu nomenclador.")
+    st.write("**Pago:** " + ("50% al inicio / 50% al final" if clasificacion in CLASES_RURALES
+                            else "Pago único al finalizar"))
+    col1, col2 = st.columns(2)
+    with col1:
+        honorarios_vep = st.text_input("Honorarios VEP ($)", placeholder="Ej.: 500.000")
+    with col2:
+        honorarios_cda = st.text_input("Honorarios CDA ($)", placeholder="Ej.: 450.000")
+    observaciones = st.text_area("Observaciones del presupuesto (opcional)", height=75)
+    if not cliente.strip():
+        st.info("Completá el nombre del cliente para habilitar las descargas.")
+    for tipo, entrada in (("VEP", honorarios_vep), ("CDA", honorarios_cda)):
+        if not entrada.strip():
+            continue
+        try:
+            importe = leer_importe(entrada)
+        except ValueError as exc:
+            st.error(f"{tipo}: {exc}")
+            continue
+        if cliente.strip() and clasificacion != "Sin determinar":
+            pdf = generar_pdf(
+                tipo, cliente.strip(), parcela["nomenclatura"], importe,
+                ubicacion, clasificacion, observaciones,
+            )
+            fecha_archivo = datetime.now(TZ_NEUQUEN).strftime("%Y%m%d_%H%M%S")
+            st.download_button(
+                f"⬇️ Descargar presupuesto {tipo} (PDF)", data=pdf,
+                file_name=f"Presupuesto_{tipo}_{parcela['nomenclatura']}_{fecha_archivo}.pdf",
+                mime="application/pdf", key=f"descargar_{tipo}",
+            )
+    st.caption("En esta etapa los archivos se descargan al equipo. Guardado en Drive / Presupuestos / Año: pendiente de implementar.")
+else:
+    st.info("Ingresá una nomenclatura y consultá el ITC para comenzar.")
+    st.link_button("Abrir Catastro Neuquén", ITC_PORTAL)

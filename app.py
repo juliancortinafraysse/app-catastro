@@ -35,7 +35,7 @@ MESES = (
     "agosto", "septiembre", "octubre", "noviembre", "diciembre"
 )
 TIPOS_PARCELA = ["Sin determinar", "Urbana", "RUI", "ROE", "RUE", "Otra"]
-CLASES_RURALES = {"RUI", "ROE", "RUE"}  # Confirmar el uso de RUE con ITC.
+CLASES_RURALES = {"RUI", "ROE"}  # La regla 50/50 solicitada aplica a estas dos categorías.
 
 
 # --- Consulta ITC ---
@@ -164,6 +164,7 @@ def consultar_itc(nomenclatura, usuario, contrasena):
                     pass  # Un error geográfico no cancela el presupuesto.
 
         return {
+            "version_datos": 2,
             "nomenclatura": numero,
             "ubicacion": str(parcela.get("UbicacionLoteo") or ""),
             "clasificacion_detectada": detectar_clasificacion(parcela),
@@ -179,6 +180,38 @@ def consultar_itc(nomenclatura, usuario, contrasena):
         return None, "Se agotó el tiempo de respuesta del ITC. Probá de nuevo."
     except (requests.RequestException, ValueError, KeyError, TypeError):
         return None, "No se pudo completar la consulta al ITC. Revisá conexión, credenciales y formato de respuesta."
+
+
+# --- Compatibilidad con consultas anteriores guardadas por Streamlit ---
+
+def adaptar_parcela(datos):
+    """Estandariza datos antiguos y actuales sin asumir clases rurales no verificadas.
+
+    Streamlit puede conservar session_state tras actualizar app.py. La primera
+    versión guardaba `es_rui_rue`, `ubicacion_loteo` y `documento_url`; la nueva
+    espera `estado`, `clasificacion_detectada`, `ubicacion` y `visor_url`.
+    """
+    if not isinstance(datos, dict):
+        return None
+    nom = limpiar_nomenclatura(str(datos.get("nomenclatura") or ""))
+    if not re.fullmatch(r"\d{15}", nom):
+        return None
+
+    clase = datos.get("clasificacion_detectada") or "Sin determinar"
+    if clase not in TIPOS_PARCELA:
+        clase = "Sin determinar"
+    # Un indicador booleano viejo como es_rui_rue NO permite distinguir ROE/RUI.
+    # En esos casos forzamos confirmación manual del tipo antes de presupuestar.
+    return {
+        "version_datos": 2,
+        "nomenclatura": nom,
+        "ubicacion": str(datos.get("ubicacion") or datos.get("ubicacion_loteo") or ""),
+        "clasificacion_detectada": clase,
+        "estado": str(datos.get("estado") or datos.get("Estado") or "No informado"),
+        "google_maps_url": str(datos.get("google_maps_url") or ""),
+        "visor_url": str(datos.get("visor_url") or datos.get("documento_url")
+                         or f"{VISOR_BASE}&nomenclatura={quote(nom)}"),
+    }
 
 
 # --- PDF de honorarios ---
@@ -330,12 +363,26 @@ if st.button("Consultar parcela en ITC", type="primary"):
         st.session_state["ubicacion_editable"] = datos["ubicacion"]
         st.session_state["clasificacion_editable"] = datos["clasificacion_detectada"]
 
+# Convertir datos de versiones anteriores guardados en la sesión.
+# También evita el KeyError: 'estado' / 'es_rui_rue' observado en Streamlit Cloud.
+if "parcela" in st.session_state:
+    normalizada = adaptar_parcela(st.session_state["parcela"])
+    if normalizada is None:
+        limpiar_consulta()
+        st.warning("Se descartaron datos de una sesión anterior. Consultá la nomenclatura nuevamente.")
+    else:
+        st.session_state["parcela"] = normalizada
+        st.session_state.setdefault("ubicacion_editable", normalizada["ubicacion"])
+        st.session_state.setdefault("clasificacion_editable", normalizada["clasificacion_detectada"])
+        if st.session_state["clasificacion_editable"] not in TIPOS_PARCELA:
+            st.session_state["clasificacion_editable"] = "Sin determinar"
+
 if "parcela" in st.session_state:
     parcela = st.session_state["parcela"]
     st.success("Consulta parcelaria recibida desde ITC.")
     st.write(f"**Nomenclatura:** {parcela['nomenclatura']}")
-    st.write(f"**Estado según respuesta:** {parcela['estado']}")
-    st.write(f"**Clasificación detectada:** {parcela['clasificacion_detectada']}")
+    st.write(f"**Estado según respuesta:** {parcela.get('estado', 'No informado')}")
+    st.write(f"**Clasificación detectada:** {parcela.get('clasificacion_detectada', 'Sin determinar')}")
     if parcela["clasificacion_detectada"] == "Sin determinar":
         st.warning("ITC no aportó una clasificación reconocible. Seleccionala manualmente antes de presupuestar.")
     st.caption("La clasificación automática es orientativa hasta validar el campo específico de ITC.")
@@ -354,9 +401,9 @@ if "parcela" in st.session_state:
     ubicacion = st.text_input("Ubicación / loteo (editable)", key="ubicacion_editable")
     clasificacion = st.selectbox("Clasificación de parcela (revisar)", TIPOS_PARCELA, key="clasificacion_editable")
     if clasificacion == "Sin determinar":
-        st.info("Confirmá la clasificación: ROE/RUI activa el pago 50% al inicio y 50% al final.")
+        st.info("Confirmá la clasificación antes de presupuestar: ROE/RUI activa el pago 50% al inicio y 50% al final.")
     if clasificacion == "RUE":
-        st.info("RUE se mantiene como opción heredada del código original; confirmá si corresponde a tu nomenclador.")
+        st.info("RUE se mantiene como opción heredada. El pago 50/50 se aplica únicamente a RUI o ROE.")
     st.write("**Pago:** " + ("50% al inicio / 50% al final" if clasificacion in CLASES_RURALES
                             else "Pago único al finalizar"))
     col1, col2 = st.columns(2)

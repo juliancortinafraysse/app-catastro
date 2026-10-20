@@ -5,10 +5,12 @@ planos/VEP vigentes hasta disponer de una integración documentada y probada.
 """
 
 from datetime import datetime
+from PIL import Image, ImageSequence
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from html import escape
 from io import BytesIO
 import re
+import json
 import unicodedata
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -97,89 +99,281 @@ def centro_aproximado(rings):
     return y, x  # latitud, longitud
 
 
-def consultar_itc(nomenclatura, usuario, contrasena):
+# Servicios identificados mediante análisis ESTÁTICO del ejecutable facilitado.
+# Son servicios de Catastro Neuquén, no un portal o visor externo.
+PARCELA_COMPLETA_URL = (
+    f"{ITC_BASE}/site/ITC.Services/Json/ParcelaServiceJson.svc/json/"
+    "GetCompletaByNomenclaturaList"
+)
+PARCELA_SIMPLE_URL = (
+    f"{ITC_BASE}/site/ITC.Services/Json/ParcelaServiceJson.svc/json/"
+    "GetByNomenclatura"
+)
+DOCUMENTOS_URL = (
+    f"{ITC_BASE}/site/ITC.Services/Json/GestorDocumentoServiceJson.svc/json/"
+    "GetByNomenclaturaAndExpediente"
+)
+DESCARGA_URL = f"{ITC_BASE}/site/ITC.Services/Services/FileDownload.aspx"
+
+
+def _json_catastral(respuesta):
+    respuesta.raise_for_status()
+    dato = respuesta.json()
+    # Los servicios WCF pueden encapsular la lista, en algunas instalaciones, en "d".
+    if isinstance(dato, dict) and "d" in dato:
+        dato = dato["d"]
+    if isinstance(dato, str):
+        dato = json.loads(dato)
+    return dato
+
+
+def _lista_resultado(dato, clave):
+    if isinstance(dato, dict):
+        dato = dato.get(clave, dato.get("Result", []))
+    if isinstance(dato, str):
+        dato = json.loads(dato)
+    if isinstance(dato, dict):
+        # Algunas respuestas dan un solo objeto, no una lista.
+        dato = [dato]
+    return [x for x in dato if isinstance(x, dict)] if isinstance(dato, list) else []
+
+
+def consultar_itc(nomenclatura, usuario="", contrasena=""):
+    """Consulta completa + documentos sin abrir la web de Catastro.
+
+    La aplicación de escritorio proporcionada utiliza llamadas GET y añade el
+    usuario como parámetro. Si los servicios exigen sesión en el entorno real,
+    los errores se mostrarán sin declarar que se obtuvieron documentos.
+    """
     numero = limpiar_nomenclatura(nomenclatura)
     if not re.fullmatch(r"\d{15}", numero):
-        return None, "Ingresá una nomenclatura de 15 dígitos (con o sin guiones)."
-    if not usuario or not contrasena:
-        return None, "Faltan ITC_USER e ITC_PASS en los Secrets de Streamlit."
+        return None, "Ingresá una nomenclatura catastral de 15 dígitos."
 
     headers = {
         "accept": "application/json, text/javascript, */*; q=0.01",
-        "content-type": "application/json; charset=UTF-8",
-        "origin": ITC_BASE,
-        "referer": VISOR_BASE,
-        "user-agent": "Mozilla/5.0 (compatible; EstudioJCF/1.0)",
+        "user-agent": "EstudioJCF-Catastro/2.0",
     }
+    with requests.Session() as sesion:
+        sesion.headers.update(headers)
+        # Autenticación opcional, para instalaciones ITC que exigen una sesión.
+        if usuario and contrasena:
+            try:
+                login = sesion.post(
+                    f"{ITC_BASE}/site/ITC.Services/Json/SecurityServiceJson.svc/json/PostAuthenticate",
+                    json={"user": usuario, "pass": contrasena}, timeout=15,
+                )
+                login.raise_for_status()
+            except requests.RequestException:
+                # La aplicación de escritorio consulta por GET sin esa llamada.
+                # No impedir una consulta de acceso público por un fallo del login.
+                pass
+
+        ultima_excepcion = None
+        parcelas = []
+        for url, parametros, clave in (
+            (PARCELA_COMPLETA_URL, {"nomen": numero, "id": "1"}, "GetCompletaByNomenclaturaListResult"),
+            (PARCELA_COMPLETA_URL, {"nomen": numero, "id": "0"}, "GetCompletaByNomenclaturaListResult"),
+            (PARCELA_SIMPLE_URL, {"nomen": numero, "ph": ""}, "GetByNomenclaturaResult"),
+        ):
+            try:
+                respuesta = sesion.get(url, params=parametros, timeout=20)
+                parcelas = _lista_resultado(_json_catastral(respuesta), clave)
+                if parcelas:
+                    break
+            except (requests.RequestException, ValueError, TypeError) as exc:
+                ultima_excepcion = exc
+        if not parcelas:
+            detalle = "El servicio no devolvió información parcelaria."
+            if ultima_excepcion:
+                detalle += f" Error HTTP o de respuesta: {type(ultima_excepcion).__name__}."
+            return None, detalle
+
+        coincidencias = [
+            q for q in parcelas
+            if limpiar_nomenclatura(str(q.get("Nomenclatura", ""))) == numero
+        ]
+        if not coincidencias:
+            return None, "La consulta respondió, pero no identificó la nomenclatura exacta."
+        activos = [q for q in coincidencias if str(q.get("Estado", "")).upper() == "A"]
+        parcela = activos[0] if activos else coincidencias[0]
+        nomen_efectiva = limpiar_nomenclatura(str(parcela.get("Nomenclatura") or numero))
+        tramite_id = parcela.get("TramiteId") or 0
+        try:
+            tramite_id = int(tramite_id)
+        except (TypeError, ValueError):
+            tramite_id = 0
+
+        documentos = []
+        error_documentos = ""
+        # Según el ejecutable, el servicio admite 'usuario' y 'username'.
+        for campo_usuario in ("usuario", "username"):
+            try:
+                respuesta = sesion.get(
+                    DOCUMENTOS_URL,
+                    params={"nomen": nomen_efectiva, "idtramite": tramite_id, campo_usuario: usuario},
+                    timeout=25,
+                )
+                documentos = _lista_resultado(
+                    _json_catastral(respuesta), "GetByNomenclaturaAndExpedienteResult"
+                )
+                error_documentos = ""
+                if documentos:
+                    break
+            except (requests.RequestException, ValueError, TypeError) as exc:
+                error_documentos = f"No se pudo consultar documentos ({type(exc).__name__})."
+
+        latlon = None
+        object_id = parcela.get("ObjectId")
+        service_id = parcela.get("ServiceId") or 7
+        if str(object_id).isdigit() and str(service_id).isdigit():
+            try:
+                geo = sesion.get(
+                    f"{ITC_BASE}/site/ITC.Services/proxy.ashx?"
+                    f"{ITC_BASE}/server/rest/services/EditFeatures/FeatureServer/{service_id}/query?"
+                    f"f=json&where=ObjectId%20%3D%20{object_id}"
+                    "&returnGeometry=true&outSR=4326&outFields=*", timeout=12,
+                )
+                geo.raise_for_status()
+                features = geo.json().get("features", [])
+                if features:
+                    latlon = centro_aproximado(features[0].get("geometry", {}).get("rings", []))
+            except (requests.RequestException, ValueError, TypeError, KeyError):
+                pass
+
+    return {
+        "version_datos": 3,
+        "nomenclatura": nomen_efectiva,
+        "ubicacion": str(parcela.get("UbicacionLoteo") or ""),
+        "clasificacion_detectada": detectar_clasificacion(parcela),
+        "estado": str(parcela.get("Estado") or "No informado"),
+        "google_maps_url": (
+            f"https://www.google.com/maps/search/?api=1&query={latlon[0]:.7f}%2C{latlon[1]:.7f}"
+            if latlon else ""
+        ),
+        "documentos": documentos,
+        "documentos_error": error_documentos,
+        "usuario_itc": usuario,
+        "tramite_id": tramite_id,
+    }, None
+
+
+def id_archivo(doc):
+    """El ID exacto del adjunto; de no estar presente, no inventar descarga."""
+    for clave in ("IDArchivo", "ArchivoId", "ArchivoID", "IdArchivo"):
+        valor = doc.get(clave)
+        if valor is not None and str(valor).strip().isdigit() and int(valor) > 0:
+            return int(valor)
+    # El programa compartido usa como alternativa CodigoDigitalCompleto.
+    codigo = str(doc.get("CodigoDigitalCompleto") or "").strip()
+    fragmento = codigo.rsplit("-", 1)[-1]
+    if codigo and fragmento.isdigit() and int(fragmento) > 0:
+        return int(fragmento)
+    return None
+
+
+def texto_documento(doc):
+    return " ".join(str(doc.get(c) or "") for c in (
+        "TipoDocumento", "Descripcion", "Nombre", "Documento",
+    )).upper()
+
+
+def es_vep(doc):
+    t = normalizar(texto_documento(doc))
+    return bool(re.search(r"\bVEP\b|VERIFICACION.*ESTADO PARCELARIO", t))
+
+
+def es_plano_mensura(doc):
+    t = normalizar(texto_documento(doc))
+    return bool(re.search(r"MENSURA|\bPLANO\b", t))
+
+
+def vigencia_documento(doc):
+    codigo = str(doc.get("Vigencia") or "").upper().strip()
+    if codigo == "S":
+        return "Vigente (según documento)"
+    if codigo == "N":
+        return "No vigente (según documento)"
+    return "Sin dato de vigencia"
+
+
+def fecha_documento(doc):
+    """Conserva la fecha original y la ordena sin asumir la vigencia."""
+    fecha = doc.get("Fecha") or doc.get("FechaAlta") or ""
+    if isinstance(fecha, (int, float)):
+        return datetime.fromtimestamp(fecha / 1000 if fecha > 1e11 else fecha, TZ_NEUQUEN).strftime("%d/%m/%Y")
+    texto = str(fecha).strip()
+    m = re.search(r"/Date\((-?\d+)", texto)
+    if m:
+        try:
+            return datetime.fromtimestamp(int(m.group(1)) / 1000, TZ_NEUQUEN).strftime("%d/%m/%Y")
+        except (OverflowError, OSError, ValueError):
+            pass
+    return texto[:24] if texto else "Sin fecha"
+
+
+def fecha_orden(doc):
+    valor = fecha_documento(doc)
+    for formato in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(valor[:10], formato)
+        except ValueError:
+            pass
+    return datetime.min
+
+
+def documento_nombre(doc):
+    return str(doc.get("Nombre") or doc.get("Descripcion") or doc.get("TipoDocumento") or "Documento")
+
+
+def descargar_documento(doc, usuario=""):
+    """Descarga únicamente documentos de Catastro; devuelve PDF o imagen convertida a PDF."""
+    archivo_id = id_archivo(doc)
+    if not archivo_id:
+        raise ValueError("Este documento no incluye un identificador de descarga verificable.")
+    respuesta = requests.get(
+        DESCARGA_URL,
+        params={"IDTipoArchivo": "0", "IDArchivo": str(archivo_id), "username": usuario},
+        headers={"User-Agent": "EstudioJCF-Catastro/2.0"},
+        timeout=50,
+        stream=True,
+    )
     try:
-        with requests.Session() as session:
-            session.headers.update(headers)
-            login = session.post(
-                f"{ITC_BASE}/site/ITC.Services/Json/SecurityServiceJson.svc/json/PostAuthenticate",
-                json={"user": usuario, "pass": contrasena},
-                timeout=15,
-            )
-            login.raise_for_status()
-            # El formato de éxito del login debe contrastarse con ITC real.
-            respuesta = session.get(
-                f"{ITC_BASE}/site/ITC.Services/Json/ParcelaServiceJson.svc/json/GetByNomenclatura",
-                params={"nomen": numero, "ph": ""}, timeout=15,
-            )
-            respuesta.raise_for_status()
-            contenido = respuesta.json()
-            lista = contenido.get("GetByNomenclaturaResult", []) if isinstance(contenido, dict) else []
-            if isinstance(lista, dict):
-                lista = [lista]
-            if not isinstance(lista, list):
-                return None, "El ITC devolvió una respuesta con un formato inesperado."
-            # No usar por error una parcela distinta devuelta en la lista.
-            candidatas = [
-                p for p in lista if isinstance(p, dict)
-                and limpiar_nomenclatura(str(p.get("Nomenclatura") or "")) == numero
-            ]
-            if not candidatas:
-                return None, "No se encontró una parcela con esa nomenclatura exacta."
-            activas = [p for p in candidatas if str(p.get("Estado", "")).upper() == "A"]
-            if not activas and any("Estado" in p for p in candidatas):
-                return None, "La parcela aparece en ITC, pero no se encontró un registro activo (Estado A)."
-            parcela = activas[0] if activas else candidatas[0]
+        respuesta.raise_for_status()
+        max_bytes = 35 * 1024 * 1024
+        buf = BytesIO()
+        for porcion in respuesta.iter_content(chunk_size=65536):
+            buf.write(porcion)
+            if buf.tell() > max_bytes:
+                raise ValueError("El archivo supera el límite de 35 MB por descarga.")
+        contenido = buf.getvalue()
+    finally:
+        respuesta.close()
+    if not contenido:
+        raise ValueError("Catastro devolvió un archivo vacío.")
+    if contenido[:200].lstrip().lower().startswith((b"<!doctype", b"<html")):
+        raise ValueError("Catastro devolvió una página HTML en lugar del documento.")
+    if contenido.startswith(b"%PDF-"):
+        return contenido
+    # Admite JPEG, PNG, TIFF recibidos desde Catastro: todos se entregan como PDF.
+    try:
+        with Image.open(BytesIO(contenido)) as img:
+            paginas = []
+            for frame in ImageSequence.Iterator(img):
+                paginas.append(frame.convert("RGB"))
+                if len(paginas) > 100:
+                    raise ValueError("El documento tiene demasiadas páginas para convertir.")
+            salida = BytesIO()
+            paginas[0].save(salida, format="PDF", save_all=True, append_images=paginas[1:])
+            return salida.getvalue()
+    except (OSError, IndexError) as exc:
+        raise ValueError("El archivo recibido no es un PDF ni una imagen admitida.") from exc
 
-            latlon = None
-            object_id = parcela.get("ObjectId")
-            service_id = parcela.get("ServiceId") or 7  # Valor usado en la versión original.
-            if object_id is not None and re.fullmatch(r"\d+", str(object_id)) and re.fullmatch(r"\d+", str(service_id)):
-                try:
-                    url_geo = (
-                        f"{ITC_BASE}/site/ITC.Services/proxy.ashx?"
-                        f"{ITC_BASE}/server/rest/services/EditFeatures/FeatureServer/{service_id}/query?"
-                        f"f=json&where=ObjectId%20%3D%20{object_id}"
-                        "&returnGeometry=true&outSR=4326&outFields=*"
-                    )
-                    rg = session.get(url_geo, timeout=15)
-                    rg.raise_for_status()
-                    features = rg.json().get("features", [])
-                    if features:
-                        latlon = centro_aproximado(features[0].get("geometry", {}).get("rings", []))
-                except (requests.RequestException, ValueError, TypeError, KeyError):
-                    pass  # Un error geográfico no cancela el presupuesto.
 
-        return {
-            "version_datos": 2,
-            "nomenclatura": numero,
-            "ubicacion": str(parcela.get("UbicacionLoteo") or ""),
-            "clasificacion_detectada": detectar_clasificacion(parcela),
-            "estado": str(parcela.get("Estado") or "No informado"),
-            "google_maps_url": (
-                f"https://www.google.com/maps/search/?api=1&query={latlon[0]:.7f}%2C{latlon[1]:.7f}"
-                if latlon else ""
-            ),
-            # Conservamos el vínculo original, SIN asegurar que seleccione la parcela.
-            "visor_url": f"{VISOR_BASE}&nomenclatura={quote(numero)}",
-        }, None
-    except requests.Timeout:
-        return None, "Se agotó el tiempo de respuesta del ITC. Probá de nuevo."
-    except (requests.RequestException, ValueError, KeyError, TypeError):
-        return None, "No se pudo completar la consulta al ITC. Revisá conexión, credenciales y formato de respuesta."
+def nombre_pdf_documento(doc, nomenclatura):
+    nombre = documento_nombre(doc)
+    seguro = re.sub(r"[^\w\-. ]+", "_", nombre, flags=re.UNICODE).strip(" ._")[:75]
+    numero = id_archivo(doc) or "sin_id"
+    return f"{seguro or 'Documento'}_{nomenclatura}_{numero}.pdf"
 
 
 # --- Compatibilidad con consultas anteriores guardadas por Streamlit ---
@@ -203,14 +397,16 @@ def adaptar_parcela(datos):
     # Un indicador booleano viejo como es_rui_rue NO permite distinguir ROE/RUI.
     # En esos casos forzamos confirmación manual del tipo antes de presupuestar.
     return {
-        "version_datos": 2,
+        "version_datos": 3,
         "nomenclatura": nom,
         "ubicacion": str(datos.get("ubicacion") or datos.get("ubicacion_loteo") or ""),
         "clasificacion_detectada": clase,
         "estado": str(datos.get("estado") or datos.get("Estado") or "No informado"),
         "google_maps_url": str(datos.get("google_maps_url") or ""),
-        "visor_url": str(datos.get("visor_url") or datos.get("documento_url")
-                         or f"{VISOR_BASE}&nomenclatura={quote(nom)}"),
+        "documentos": datos.get("documentos", []) if isinstance(datos.get("documentos"), list) else [],
+        "documentos_error": str(datos.get("documentos_error") or ""),
+        "usuario_itc": str(datos.get("usuario_itc") or ""),
+        "tramite_id": datos.get("tramite_id") or 0,
     }
 
 
@@ -336,25 +532,43 @@ def generar_pdf(tipo, cliente, nomenclatura, importe, ubicacion, clasificacion, 
 
 
 # --- Interfaz Streamlit ---
-st.set_page_config(page_title="Estudio JCF - Catastro Nqn", page_icon="📐", layout="centered")
+st.set_page_config(page_title="Estudio JCF - Catastro Nqn", page_icon="📐", layout="wide")
 st.title("📐 Estudio JCF - Catastro Nqn")
-st.caption("Consulta ITC y presupuestos VEP / CDA en PDF")
+
+
+def secreto(clave):
+    try:
+        return st.secrets.get(clave, "")
+    except (FileNotFoundError, OSError, KeyError):
+        return ""
+
+st.caption("Planos y documentos de Catastro dentro de la aplicación | Presupuestos VEP / CDA")
 
 
 def limpiar_consulta():
-    for clave in ("parcela", "ubicacion_editable", "clasificacion_editable"):
+    for clave in ("parcela", "ubicacion_editable", "clasificacion_editable", "pdf_documento", "pdf_archivo_nombre"):
         st.session_state.pop(clave, None)
 
 
-nomen_input = st.text_input(
-    "Nomenclatura catastral (15 dígitos)", key="nomen_input",
-    placeholder="Ej.: 092007824920000", on_change=limpiar_consulta,
-)
-if st.button("Consultar parcela en ITC", type="primary"):
-    usuario = st.secrets.get("ITC_USER", "")
-    contrasena = st.secrets.get("ITC_PASS", "")
-    with st.spinner("Consultando Catastro Neuquén..."):
-        datos, error = consultar_itc(nomen_input, usuario, contrasena)
+col_nom, col_usr = st.columns([3, 2])
+with col_nom:
+    nomen_input = st.text_input(
+        "Nomenclatura catastral (15 dígitos)", key="nomen_input",
+        placeholder="Ej.: 092007824920000", on_change=limpiar_consulta,
+    )
+with col_usr:
+    usuario = st.text_input(
+        "Usuario ITC (para identificar descargas)",
+        value=secreto("ITC_USER"),
+        help="El programa de escritorio proporcionado envía este nombre al consultar documentos. No se solicita la contraseña para consultas públicas.",
+    )
+
+if st.button("🔎 Consultar parcela y documentos", type="primary"):
+    with st.spinner("Consultando datos y documentos del ITC..."):
+        try:
+            datos, error = consultar_itc(nomen_input, usuario, secreto("ITC_PASS"))
+        except Exception as exc:
+            datos, error = None, f"Error inesperado al consultar: {type(exc).__name__}."
     limpiar_consulta()
     if error:
         st.error(error)
@@ -363,13 +577,11 @@ if st.button("Consultar parcela en ITC", type="primary"):
         st.session_state["ubicacion_editable"] = datos["ubicacion"]
         st.session_state["clasificacion_editable"] = datos["clasificacion_detectada"]
 
-# Convertir datos de versiones anteriores guardados en la sesión.
-# También evita el KeyError: 'estado' / 'es_rui_rue' observado en Streamlit Cloud.
 if "parcela" in st.session_state:
     normalizada = adaptar_parcela(st.session_state["parcela"])
     if normalizada is None:
         limpiar_consulta()
-        st.warning("Se descartaron datos de una sesión anterior. Consultá la nomenclatura nuevamente.")
+        st.warning("Datos viejos en sesión. Consultá nuevamente la nomenclatura.")
     else:
         st.session_state["parcela"] = normalizada
         st.session_state.setdefault("ubicacion_editable", normalizada["ubicacion"])
@@ -379,61 +591,150 @@ if "parcela" in st.session_state:
 
 if "parcela" in st.session_state:
     parcela = st.session_state["parcela"]
-    st.success("Consulta parcelaria recibida desde ITC.")
-    st.write(f"**Nomenclatura:** {parcela['nomenclatura']}")
-    st.write(f"**Estado según respuesta:** {parcela.get('estado', 'No informado')}")
-    st.write(f"**Clasificación detectada:** {parcela.get('clasificacion_detectada', 'Sin determinar')}")
-    if parcela["clasificacion_detectada"] == "Sin determinar":
-        st.warning("ITC no aportó una clasificación reconocible. Seleccionala manualmente antes de presupuestar.")
-    st.caption("La clasificación automática es orientativa hasta validar el campo específico de ITC.")
+    st.success("Consulta parcelaria recibida del ITC.")
+    st.markdown(f"**Nomenclatura:** {parcela['nomenclatura']}  |  **Estado:** {parcela.get('estado','No informado')}  |  "
+                f"**Ubicación:** {parcela.get('ubicacion') or 'Sin dato'}")
+    if parcela.get("google_maps_url"):
+        st.link_button("📍 Ubicación aproximada en Google Maps", parcela["google_maps_url"])
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.link_button("Abrir visor ITC", parcela["visor_url"])
-    with col_b:
-        if parcela["google_maps_url"]:
-            st.link_button("📍 Ubicación aproximada", parcela["google_maps_url"])
-    st.caption("El enlace al visor NO está verificado como acceso directo al último plano. "
-               "Tampoco descarga todavía la VEP vigente.")
-    st.divider()
-    st.subheader("Presupuestos profesionales")
-    cliente = st.text_input("Nombre del comitente", placeholder="Completar nombre")
-    ubicacion = st.text_input("Ubicación / loteo (editable)", key="ubicacion_editable")
-    clasificacion = st.selectbox("Clasificación de parcela (revisar)", TIPOS_PARCELA, key="clasificacion_editable")
-    if clasificacion == "Sin determinar":
-        st.info("Confirmá la clasificación antes de presupuestar: ROE/RUI activa el pago 50% al inicio y 50% al final.")
-    if clasificacion == "RUE":
-        st.info("RUE se mantiene como opción heredada. El pago 50/50 se aplica únicamente a RUI o ROE.")
-    st.write("**Pago:** " + ("50% al inicio / 50% al final" if clasificacion in CLASES_RURALES
-                            else "Pago único al finalizar"))
-    col1, col2 = st.columns(2)
-    with col1:
-        honorarios_vep = st.text_input("Honorarios VEP ($)", placeholder="Ej.: 500.000")
-    with col2:
-        honorarios_cda = st.text_input("Honorarios CDA ($)", placeholder="Ej.: 450.000")
-    observaciones = st.text_area("Observaciones del presupuesto (opcional)", height=75)
-    if not cliente.strip():
-        st.info("Completá el nombre del cliente para habilitar las descargas.")
-    for tipo, entrada in (("VEP", honorarios_vep), ("CDA", honorarios_cda)):
-        if not entrada.strip():
-            continue
-        try:
-            importe = leer_importe(entrada)
-        except ValueError as exc:
-            st.error(f"{tipo}: {exc}")
-            continue
-        if cliente.strip() and clasificacion != "Sin determinar":
-            pdf = generar_pdf(
-                tipo, cliente.strip(), parcela["nomenclatura"], importe,
-                ubicacion, clasificacion, observaciones,
-            )
-            fecha_archivo = datetime.now(TZ_NEUQUEN).strftime("%Y%m%d_%H%M%S")
+    tab_docs, tab_presup = st.tabs(["📂 Planos y documentos", "📄 Presupuestos VEP / CDA"])
+    with tab_docs:
+        docs = parcela.get("documentos", [])
+        if parcela.get("documentos_error"):
+            st.warning(parcela["documentos_error"])
+        st.write(f"**Documentos encontrados:** {len(docs)}")
+        st.caption("Listado obtenido desde los servicios del Gestor de Documentos de Catastro, sin abrir su portal web.")
+        if not docs:
+            st.info("No se encontraron documentos. Puede deberse a un acceso restringido, a una respuesta vacía o a que no hay archivos para esta parcela.")
+        else:
+            planos = [d for d in docs if es_plano_mensura(d)]
+            veps = [d for d in docs if es_vep(d)]
+            for rotulo, candidatos in (("Plano de mensura", planos), ("VEP", veps)):
+                vigentes = [d for d in candidatos if str(d.get("Vigencia") or "").strip().upper() == "S"]
+                ordenados = sorted(vigentes or candidatos, key=fecha_orden, reverse=True)
+                if ordenados:
+                    mejor = ordenados[0]
+                    if vigentes:
+                        st.success(f"{rotulo} marcado vigente: {documento_nombre(mejor)} — {fecha_documento(mejor)}")
+                    else:
+                        st.info(f"{rotulo} más reciente encontrado: {documento_nombre(mejor)} — {fecha_documento(mejor)}. **Vigencia sin confirmar.**")
+            # Atajos a documentos identificados como vigentes por el Gestor.
+            ultimos_vigentes = {}
+            for nombre, grupo in (("plano", planos), ("vep", veps)):
+                candidatos = [d for d in grupo if str(d.get("Vigencia") or "").strip().upper() == "S" and id_archivo(d)]
+                if candidatos:
+                    ultimos_vigentes[nombre] = sorted(candidatos, key=fecha_orden, reverse=True)[0]
+            atajo_plano, atajo_vep = st.columns(2)
+            with atajo_plano:
+                if st.button("📐 Preparar último plano marcado vigente", disabled="plano" not in ultimos_vigentes, use_container_width=True):
+                    with st.spinner("Descargando plano..."):
+                        try:
+                            d = ultimos_vigentes["plano"]
+                            st.session_state["pdf_documento"] = descargar_documento(d, usuario or parcela.get("usuario_itc"))
+                            st.session_state["pdf_archivo_nombre"] = nombre_pdf_documento(d, parcela["nomenclatura"])
+                        except (requests.RequestException, ValueError) as exc:
+                            st.session_state.pop("pdf_documento", None)
+                            st.error(f"No se pudo obtener el plano: {exc}")
+            with atajo_vep:
+                if st.button("📋 Preparar última VEP marcada vigente", disabled="vep" not in ultimos_vigentes, use_container_width=True):
+                    with st.spinner("Descargando VEP..."):
+                        try:
+                            d = ultimos_vigentes["vep"]
+                            st.session_state["pdf_documento"] = descargar_documento(d, usuario or parcela.get("usuario_itc"))
+                            st.session_state["pdf_archivo_nombre"] = nombre_pdf_documento(d, parcela["nomenclatura"])
+                        except (requests.RequestException, ValueError) as exc:
+                            st.session_state.pop("pdf_documento", None)
+                            st.error(f"No se pudo obtener la VEP: {exc}")
+            if len(ultimos_vigentes) < 2:
+                st.caption("Si un atajo está deshabilitado, el servicio no informó un documento de ese tipo con vigencia 'S' e ID digital. Revisá el listado manualmente.")
+            st.caption("'Vigente' aquí refleja un indicador del documento; no reemplaza la comprobación legal de la subsistencia de la VEP.")
+            filtro = st.radio("Filtrar documentos", ["Todos", "Planos / mensuras", "VEP"], horizontal=True)
+            visibles = docs if filtro == "Todos" else (planos if filtro == "Planos / mensuras" else veps)
+            visibles = sorted(visibles, key=fecha_orden, reverse=True)
+            if not visibles:
+                st.info("No hay documentos de este tipo en la respuesta.")
+            else:
+                registros = []
+                for i, d in enumerate(visibles):
+                    registros.append({
+                        "#": i+1,
+                        "Documento": documento_nombre(d),
+                        "Tipo": str(d.get("TipoDocumento") or "-"),
+                        "Fecha": fecha_documento(d),
+                        "Vigencia": vigencia_documento(d),
+                        "Archivo": "Disponible" if id_archivo(d) else "Sin ID digital",
+                    })
+                st.dataframe(registros, hide_index=True, use_container_width=True)
+                con_id = [d for d in visibles if id_archivo(d)]
+                if con_id:
+                    indices = range(len(con_id))
+                    elegido = st.selectbox(
+                        "Elegí un documento para verlo y descargarlo dentro de esta página",
+                        indices,
+                        format_func=lambda i: f"{documento_nombre(con_id[i])} | {fecha_documento(con_id[i])} | ID {id_archivo(con_id[i])}",
+                    )
+                    documento = con_id[elegido]
+                    if st.button("👁️ Cargar y visualizar documento", type="primary", key="abrir_doc"):
+                        with st.spinner("Descargando documento desde Catastro..."):
+                            try:
+                                st.session_state["pdf_documento"] = descargar_documento(
+                                    documento, usuario or parcela.get("usuario_itc")
+                                )
+                                st.session_state["pdf_archivo_nombre"] = nombre_pdf_documento(
+                                    documento, parcela["nomenclatura"]
+                                )
+                            except (requests.RequestException, ValueError) as exc:
+                                st.session_state.pop("pdf_documento", None)
+                                st.error(f"Catastro no entregó este archivo: {str(exc)}")
+                else:
+                    st.warning("Los registros no incluyen identificadores digitales de archivo descargables.")
+
+        if "pdf_documento" in st.session_state:
             st.download_button(
-                f"⬇️ Descargar presupuesto {tipo} (PDF)", data=pdf,
-                file_name=f"Presupuesto_{tipo}_{parcela['nomenclatura']}_{fecha_archivo}.pdf",
-                mime="application/pdf", key=f"descargar_{tipo}",
+                "⬇️ Descargar documento en PDF",
+                data=st.session_state["pdf_documento"],
+                file_name=st.session_state["pdf_archivo_nombre"],
+                mime="application/pdf", key="descargar_documento_pdf",
             )
-    st.caption("En esta etapa los archivos se descargan al equipo. Guardado en Drive / Presupuestos / Año: pendiente de implementar.")
+            if hasattr(st, "pdf"):
+                st.pdf(st.session_state["pdf_documento"], height=650)
+            else:
+                st.info("Para ver el PDF dentro de la página instalá streamlit[pdf]. La descarga ya está disponible.")
+
+    with tab_presup:
+        st.subheader("Presupuesto profesional")
+        cliente = st.text_input("Nombre del comitente", placeholder="Nombre del cliente")
+        ubicacion = st.text_input("Ubicación / loteo (editable)", key="ubicacion_editable")
+        clasificacion = st.selectbox("Clasificación de parcela (revisar)", TIPOS_PARCELA, key="clasificacion_editable")
+        st.caption("Si Catastro no indica la clasificación, confirmala manualmente antes de presupuestar.")
+        if clasificacion == "Sin determinar":
+            st.info("Confirmá la clasificación antes de presupuestar.")
+        st.write("**Pago:** " + ("50% al inicio / 50% al final" if clasificacion in CLASES_RURALES else "Pago único al finalizar"))
+        col_vep, col_cda = st.columns(2)
+        with col_vep:
+            honorarios_vep = st.text_input("Honorarios VEP ($)", placeholder="Ej.: 500.000")
+        with col_cda:
+            honorarios_cda = st.text_input("Honorarios CDA ($)", placeholder="Ej.: 450.000")
+        observaciones = st.text_area("Observaciones del presupuesto (opcional)", height=75)
+        for tipo, entrada in (("VEP", honorarios_vep), ("CDA", honorarios_cda)):
+            if not entrada.strip():
+                continue
+            try:
+                importe = leer_importe(entrada)
+            except ValueError as exc:
+                st.error(f"{tipo}: {exc}")
+                continue
+            if cliente.strip() and clasificacion != "Sin determinar":
+                pdf = generar_pdf(
+                    tipo, cliente.strip(), parcela["nomenclatura"], importe,
+                    ubicacion, clasificacion, observaciones,
+                )
+                fecha_archivo = datetime.now(TZ_NEUQUEN).strftime("%Y%m%d_%H%M%S")
+                st.download_button(
+                    f"⬇️ Descargar presupuesto {tipo} (PDF)", data=pdf,
+                    file_name=f"Presupuesto_{tipo}_{parcela['nomenclatura']}_{fecha_archivo}.pdf",
+                    mime="application/pdf", key=f"descargar_presupuesto_{tipo}",
+                )
+        st.caption("Los presupuestos se descargan a tu equipo. Google Drive / Presupuestos / Año se incorporará después.")
 else:
-    st.info("Ingresá una nomenclatura y consultá el ITC para comenzar.")
-    st.link_button("Abrir Catastro Neuquén", ITC_PORTAL)
+    st.info("Ingresá una nomenclatura para consultar la parcela y sus documentos directamente desde la aplicación.")

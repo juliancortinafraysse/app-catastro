@@ -60,7 +60,6 @@ def consultar_itc(nomenclatura):
     object_id = parcela.get("ObjectId")
     service_id = parcela.get("ServiceId", 7)
 
-    # Barrido completo para detectar RUI / RUE de forma infalible
     texto_parcela = " ".join([str(v) for v in parcela.values()]).upper()
     es_rui_rue = (
         "RUI" in texto_parcela
@@ -68,8 +67,6 @@ def consultar_itc(nomenclatura):
         or "RUE" in texto_parcela
         or "RURAL EXTENSIVA" in texto_parcela
     )
-
-    tramite = parcela.get("Tramite") or "Sin antecedente"
 
     documento_url = f"{ITC_BASE}/portal/apps/webappviewer/index.html?id=63f0c3f9a047425280951f418621171f&nomenclatura={nomen_limpia}"
 
@@ -91,11 +88,7 @@ def consultar_itc(nomenclatura):
 
     resultado = {
         "nomenclatura": parcela.get("Nomenclatura"),
-        "plano_antecedente": tramite,
         "ubicacion_loteo": parcela.get("UbicacionLoteo") or "-",
-        "lote": parcela.get("DenominacionLote") or "-",
-        "manzana": parcela.get("DenominacionManzana") or "-",
-        "sup_mensura": parcela.get("SupMensura") or 0,
         "es_rui_rue": es_rui_rue,
         "google_maps_url": (
             f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
@@ -114,7 +107,6 @@ def generar_pdf(tipo, cliente, nomenclatura, honorarios, ubicacion, es_rui_rue):
   pdf = canvas.Canvas(buffer, pagesize=A4)
   w, h = A4
 
-  # Encabezado corporativo JCF
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
   pdf.rect(0, h - 40, w, 40, stroke=0, fill=1)
   pdf.setFillColorRGB(1, 1, 1)
@@ -135,7 +127,6 @@ def generar_pdf(tipo, cliente, nomenclatura, honorarios, ubicacion, es_rui_rue):
   pdf.setLineWidth(0.75)
   pdf.line(40, h - 105, w - 40, h - 105)
 
-  # Fecha y Comitente
   fecha = datetime.now().strftime("%d de octubre de 2026")
   pdf.setFont("Helvetica", 10)
   pdf.setFillColorRGB(0.2, 0.2, 0.2)
@@ -154,7 +145,6 @@ def generar_pdf(tipo, cliente, nomenclatura, honorarios, ubicacion, es_rui_rue):
   pdf.setFillColorRGB(0.1, 0.2, 0.35)
   pdf.drawString(40, h - 182, f"REF.: PROPUESTA DE HONORARIOS - {titulo}")
 
-  # Cuerpo técnico (Sin sombra gris y sin plano antecedente)
   pdf.setFont("Helvetica", 10)
   pdf.setFillColorRGB(0.2, 0.2, 0.2)
   pdf.drawString(
@@ -222,4 +212,108 @@ def generar_pdf(tipo, cliente, nomenclatura, honorarios, ubicacion, es_rui_rue):
   pdf.setFillColorRGB(0.4, 0.4, 0.4)
   pdf.drawString(40, h - 648, "Matrícula Profesional AGR. 382")
 
-  pdf.showPage
+  pdf.showPage()
+  pdf.save()
+  buffer.seek(0)
+  return buffer
+
+
+nomenclatura_input = st.text_input(
+    "Nomenclatura Catastral (15 dígitos):", value="092007824920000"
+)
+
+if st.button("Consultar Automático (ITC)", type="primary"):
+  with st.spinner("Conectando con Catastro Neuquén..."):
+    data, error = consultar_itc(nomenclatura_input)
+    if error:
+      st.error(error)
+    else:
+      st.session_state["parcela"] = data
+
+if "parcela" in st.session_state:
+  p = st.session_state["parcela"]
+  st.success("¡Datos de parcela obtenidos con éxito desde Catastro!")
+
+  st.markdown(f"**Ubicación / Loteo:** {p['ubicacion_loteo']}")
+
+  es_rui = p.get("es_rui_rue", False)
+  st.markdown(
+      f"**Clasificación RUI / RUE (Catastro):**"
+      f" `{'Sí (Rural Intensiva/Extensiva)' if es_rui else 'No (Urbana / Estándar)'}`"
+  )
+
+  col_link1, col_link2 = st.columns(2)
+  with col_link1:
+    if p.get("documento_url"):
+      st.markdown(
+          f"<a href='{p['documento_url']}' target='_blank'"
+          " style='display:block; text-align:center; background:#2b6cb0;"
+          " color:white; padding:10px; border-radius:6px; text-decoration:none;"
+          " font-weight:bold;'>📄 Ver Ficha y Planos en Catastro Nqn</a>",
+          unsafe_allow_html=True,
+      )
+  with col_link2:
+    if p.get("google_maps_url"):
+      st.markdown(
+          f"<a href='{p['google_maps_url']}' target='_blank'"
+          " style='display:block; text-align:center; background:#319795;"
+          " color:white; padding:10px; border-radius:6px; text-decoration:none;"
+          " font-weight:bold;'>📍 Ver ubicación en Google Maps</a>",
+          unsafe_allow_html=True,
+      )
+
+  st.divider()
+  st.subheader("Armar Presupuesto Profesional Editable")
+  cliente = st.text_input(
+      "Nombre del Comitente / Cliente:", value="Juan Pérez"
+  )
+
+  col1, col2 = st.columns(2)
+  with col1:
+    monto_vep = st.text_input("Honorarios VEP ($):", value="500.000")
+  with col2:
+    monto_cda = st.text_input("Honorarios CDA ($):", value="450.000")
+
+  condicion_pago = (
+      "50% anticipo al inicio / 50% saldo contra entrega"
+      if es_rui
+      else "Pago único contra entrega"
+  )
+  st.info(f"📋 **Condición de pago automática aplicable:** {condicion_pago}")
+
+  st.markdown("### Generar y Descargar Presupuestos en PDF")
+  col_btn1, col_btn2 = st.columns(2)
+
+  with col_btn1:
+    if st.button("📄 Generar PDF VEP", type="primary"):
+      pdf_buffer = generar_pdf(
+          "VEP",
+          cliente,
+          p["nomenclatura"],
+          monto_vep,
+          p["ubicacion_loteo"],
+          es_rui,
+      )
+      st.download_button(
+          label="⬇️ Descargar Presupuesto VEP (PDF)",
+          data=pdf_buffer,
+          file_name=f"Presupuesto_VEP_{p['nomenclatura']}.pdf",
+          mime="application/pdf",
+      )
+
+  with col_btn2:
+    if st.button("📄 Generar PDF CDA", type="primary"):
+      pdf_buffer = generar_pdf(
+          "CDA",
+          cliente,
+          p["nomenclatura"],
+          monto_cda,
+          p["ubicacion_loteo"],
+          es_rui,
+      )
+      st.download_button(
+          label="⬇️ Descargar Presupuesto CDA (PDF)",
+          data=pdf_buffer,
+          file_name=f"Presupuesto_CDA_{p['nomenclatura']}.pdf",
+          mime="application/pdf",
+      )

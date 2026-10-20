@@ -160,7 +160,7 @@ def consultar_itc(nomenclatura, usuario="", contrasena=""):
             try:
                 login = sesion.post(
                     f"{ITC_BASE}/site/ITC.Services/Json/SecurityServiceJson.svc/json/PostAuthenticate",
-                    json={"user": usuario, "pass": contrasena}, timeout=15,
+                    json={"user": usuario, "pass": contrasena}, timeout=(7, 15),
                 )
                 login.raise_for_status()
             except requests.RequestException:
@@ -176,10 +176,20 @@ def consultar_itc(nomenclatura, usuario="", contrasena=""):
             (PARCELA_SIMPLE_URL, {"nomen": numero, "ph": ""}, "GetByNomenclaturaResult"),
         ):
             try:
-                respuesta = sesion.get(url, params=parametros, timeout=20)
+                respuesta = sesion.get(url, params=parametros, timeout=(7, 20))
                 parcelas = _lista_resultado(_json_catastral(respuesta), clave)
                 if parcelas:
                     break
+            except requests.exceptions.ConnectTimeout:
+                # Si no hay conexión al servidor, insistir contra el mismo
+                # dominio tres veces solo aumenta la espera del usuario.
+                return None, (
+                    "No se pudo conectar con el servidor de Catastro desde Streamlit "
+                    "(ConnectTimeout). La app está funcionando, pero el ITC no respondió. "
+                    "Probá nuevamente más tarde. Si el programa de Windows funciona "
+                    "y esta página sigue fallando, puede haber una restricción de red "
+                    "para las conexiones desde Streamlit Cloud."
+                )
             except (requests.RequestException, ValueError, TypeError) as exc:
                 ultima_excepcion = exc
         if not parcelas:
@@ -211,7 +221,7 @@ def consultar_itc(nomenclatura, usuario="", contrasena=""):
                 respuesta = sesion.get(
                     DOCUMENTOS_URL,
                     params={"nomen": nomen_efectiva, "idtramite": tramite_id, campo_usuario: usuario},
-                    timeout=25,
+                    timeout=(7, 25),
                 )
                 documentos = _lista_resultado(
                     _json_catastral(respuesta), "GetByNomenclaturaAndExpedienteResult"
@@ -219,6 +229,9 @@ def consultar_itc(nomenclatura, usuario="", contrasena=""):
                 error_documentos = ""
                 if documentos:
                     break
+            except requests.exceptions.ConnectTimeout:
+                error_documentos = "El Gestor de Documentos de Catastro no respondió (ConnectTimeout)."
+                break
             except (requests.RequestException, ValueError, TypeError) as exc:
                 error_documentos = f"No se pudo consultar documentos ({type(exc).__name__})."
 
@@ -231,7 +244,7 @@ def consultar_itc(nomenclatura, usuario="", contrasena=""):
                     f"{ITC_BASE}/site/ITC.Services/proxy.ashx?"
                     f"{ITC_BASE}/server/rest/services/EditFeatures/FeatureServer/{service_id}/query?"
                     f"f=json&where=ObjectId%20%3D%20{object_id}"
-                    "&returnGeometry=true&outSR=4326&outFields=*", timeout=12,
+                    "&returnGeometry=true&outSR=4326&outFields=*", timeout=(7, 12),
                 )
                 geo.raise_for_status()
                 features = geo.json().get("features", [])
@@ -334,7 +347,7 @@ def descargar_documento(doc, usuario=""):
         DESCARGA_URL,
         params={"IDTipoArchivo": "0", "IDArchivo": str(archivo_id), "username": usuario},
         headers={"User-Agent": "EstudioJCF-Catastro/2.0"},
-        timeout=50,
+        timeout=(8, 40),
         stream=True,
     )
     try:
@@ -537,10 +550,17 @@ st.title("📐 Estudio JCF - Catastro Nqn")
 
 
 def secreto(clave):
+    """Lee la configuración permanente de Streamlit Cloud (no GitHub)."""
     try:
-        return st.secrets.get(clave, "")
+        return str(st.secrets.get(clave, "") or "").strip()
     except (FileNotFoundError, OSError, KeyError):
         return ""
+
+
+# Se carga UNA sola vez desde la configuración privada de Streamlit.
+# No hay campo para escribir el usuario en cada consulta.
+USUARIO_ITC = secreto("ITC_USER")
+CONTRASENA_ITC = secreto("ITC_PASS")
 
 st.caption("Planos y documentos de Catastro dentro de la aplicación | Presupuestos VEP / CDA")
 
@@ -550,23 +570,23 @@ def limpiar_consulta():
         st.session_state.pop(clave, None)
 
 
-col_nom, col_usr = st.columns([3, 2])
-with col_nom:
-    nomen_input = st.text_input(
-        "Nomenclatura catastral (15 dígitos)", key="nomen_input",
-        placeholder="Ej.: 092007824920000", on_change=limpiar_consulta,
-    )
-with col_usr:
-    usuario = st.text_input(
-        "Usuario ITC (para identificar descargas)",
-        value=secreto("ITC_USER"),
-        help="El programa de escritorio proporcionado envía este nombre al consultar documentos. No se solicita la contraseña para consultas públicas.",
+nomen_input = st.text_input(
+    "Nomenclatura catastral (15 dígitos)", key="nomen_input",
+    placeholder="Ej.: 092007824920000", on_change=limpiar_consulta,
+)
+if USUARIO_ITC:
+    st.caption("🔒 Usuario de ITC guardado en la configuración privada de Streamlit; no hace falta volver a ingresarlo.")
+else:
+    st.info(
+        "Para que el usuario de ITC quede guardado de manera permanente, configurá "
+        "`ITC_USER` una sola vez en **Streamlit Cloud → Manage app → Settings → Secrets**. "
+        "Mientras tanto, podés intentar la consulta sin usuario, pero ciertas descargas podrían no estar disponibles."
     )
 
 if st.button("🔎 Consultar parcela y documentos", type="primary"):
     with st.spinner("Consultando datos y documentos del ITC..."):
         try:
-            datos, error = consultar_itc(nomen_input, usuario, secreto("ITC_PASS"))
+            datos, error = consultar_itc(nomen_input, USUARIO_ITC, CONTRASENA_ITC)
         except Exception as exc:
             datos, error = None, f"Error inesperado al consultar: {type(exc).__name__}."
     limpiar_consulta()
@@ -630,7 +650,7 @@ if "parcela" in st.session_state:
                     with st.spinner("Descargando plano..."):
                         try:
                             d = ultimos_vigentes["plano"]
-                            st.session_state["pdf_documento"] = descargar_documento(d, usuario or parcela.get("usuario_itc"))
+                            st.session_state["pdf_documento"] = descargar_documento(d, USUARIO_ITC or parcela.get("usuario_itc", ""))
                             st.session_state["pdf_archivo_nombre"] = nombre_pdf_documento(d, parcela["nomenclatura"])
                         except (requests.RequestException, ValueError) as exc:
                             st.session_state.pop("pdf_documento", None)
@@ -640,7 +660,7 @@ if "parcela" in st.session_state:
                     with st.spinner("Descargando VEP..."):
                         try:
                             d = ultimos_vigentes["vep"]
-                            st.session_state["pdf_documento"] = descargar_documento(d, usuario or parcela.get("usuario_itc"))
+                            st.session_state["pdf_documento"] = descargar_documento(d, USUARIO_ITC or parcela.get("usuario_itc", ""))
                             st.session_state["pdf_archivo_nombre"] = nombre_pdf_documento(d, parcela["nomenclatura"])
                         except (requests.RequestException, ValueError) as exc:
                             st.session_state.pop("pdf_documento", None)
@@ -678,7 +698,7 @@ if "parcela" in st.session_state:
                         with st.spinner("Descargando documento desde Catastro..."):
                             try:
                                 st.session_state["pdf_documento"] = descargar_documento(
-                                    documento, usuario or parcela.get("usuario_itc")
+                                    documento, USUARIO_ITC or parcela.get("usuario_itc", "")
                                 )
                                 st.session_state["pdf_archivo_nombre"] = nombre_pdf_documento(
                                     documento, parcela["nomenclatura"]
